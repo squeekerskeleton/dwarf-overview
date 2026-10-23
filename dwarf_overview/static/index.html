@@ -969,13 +969,14 @@ async function linkWatch() {
 setInterval(linkWatch, 1000);
 function showBanner(html, color) { const b = $("linkBanner"); b.dataset.owner = "action"; b.style.background = color; $("linkMsg").innerHTML = html; $("linkRetry").classList.add("hidden"); b.classList.remove("hidden"); }
 $("awayBtn").onclick = async () => {
-  if (!confirm("AWAY: stop everything (moving, tracking, capturing, including any capture in progress) and move the DWARF to its AWAY position?")) return;
+  if (!confirm("AWAY: stop everything (moving, tracking, capturing, including any capture in progress)? (Moving to the AWAY position is switched off for now.)")) return;
   showBanner('<span class="spinner"></span> AWAY: stopping everything&hellip;', "#5a4a1a");
   try {
     const { job_id } = await api("/api/scope/away", {});
     for (;;) { await new Promise((r) => setTimeout(r, 1000)); const j = await api("/api/job/" + job_id);
       if (j.state === "running") { showBanner(`<span class="spinner"></span> ${esc(j.log[j.log.length - 1])}`, "#5a4a1a"); continue; }
       if (j.state !== "done") throw new Error(j.error || "AWAY failed.");
+      if (j.output && j.output.position === "none") { showBanner("<b>Everything is stopped.</b> Moving to the AWAY position is switched off in this version while it's being fixed.", "#1f4a2a"); break; }
       showBanner(j.output && j.output.position === "yours" ? "<b>AWAY done.</b> Everything is stopped and the DWARF is back at your AWAY position." : "<b>AWAY done</b> (factory home position: set your own in Settings). Everything is stopped.", "#1f4a2a"); break; }
   } catch (e) { showBanner(`<b>AWAY didn't finish.</b> ${esc(e.message)}`, "#5f1f1f"); }
 };

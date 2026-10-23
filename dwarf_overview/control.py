@@ -364,6 +364,7 @@ def _await_final(l: "Link", module: int, cmd: int, data: bytes, timeout: float, 
 
 
 MOTORS = {1: "rotation", 2: "tilt"}
+AWAY_MOVES = False  # off until the move is checked on a real DWARF 3
 
 
 def _position_from(data: bytes) -> tuple[int, float]:
@@ -430,6 +431,9 @@ def away(progress=None) -> dict:
     cfg = config.load()
     ip, hw = (cfg.get("dwarf_ip") or "").strip(), int(cfg.get("dwarf_hardware_id") or 2)
     stopped = scope.stop_all(ip, hw)
+    if not AWAY_MOVES:
+        # Moving was switched off after it turned the wrong way on a real DWARF 3 (0.6.1). AWAY only stops.
+        return {"stopped": stopped.get("acknowledged"), "parked": False, "position": "none"}
     if progress:
         progress("Stopped everything; sending the telescope home…")
     time.sleep(1.0)
