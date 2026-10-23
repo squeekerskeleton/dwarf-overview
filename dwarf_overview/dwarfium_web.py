@@ -8,6 +8,11 @@ http://127.0.0.1:8000, which the Telescope tab embeds.
 Installing downloads Dwarfium-Win.zip from the project's official release page
 (linked from the Dwarfium README) and only extracts it if its SHA-256 matches
 the digest GitHub publishes for that release asset.
+
+Autofill: Dwarfium keeps its connection settings in its own page storage, which
+this app can't write to directly. So a tiny page is placed next to Dwarfium's
+files; opened with the DWARF's address, site and time zone after the "#", it
+saves them where Dwarfium looks on start-up and opens Dwarfium's connect page.
 """
 from __future__ import annotations
 
@@ -29,6 +34,25 @@ DEFAULT_URL = "http://127.0.0.1:8000"
 ALLOWED_HOSTS = {"api.github.com", "github.com", "objects.githubusercontent.com",
                  "release-assets.githubusercontent.com"}
 MAX_BYTES = 800 * 1024 * 1024
+HELPER_NAME = "dwarf-overview-connect.html"
+HELPER_HTML = """<!doctype html>
+<meta charset="utf-8"><title>Connecting to your DWARF</title>
+<body style="background:#000;color:#ccc;font:14px system-ui">Filling in your DWARF's details&hellip;
+<script>
+(function () {
+  var p = new URLSearchParams(location.hash.slice(1)), num = function (k, lim) {
+    var v = parseFloat(p.get(k)); return isFinite(v) && Math.abs(v) <= lim ? String(v) : null; };
+  var ip = p.get("ip") || "", m = /^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$/.exec(ip);
+  var ok = m && m.slice(1).every(function (o) { return +o < 256; }) &&
+    (m[1] == "10" || (m[1] == "192" && m[2] == "168") || (m[1] == "172" && +m[2] >= 16 && +m[2] <= 31) || (m[1] == "169" && m[2] == "254"));
+  if (ok) localStorage.setItem("IPDwarf", ip);
+  var lat = num("lat", 90), lon = num("lon", 180), tz = p.get("tz") || "";
+  if (lat !== null && lon !== null) { localStorage.setItem("latitude", lat); localStorage.setItem("longitude", lon); }
+  if (/^[A-Za-z_]+(\\/[A-Za-z0-9_+-]+)*$/.test(tz)) localStorage.setItem("timezone", tz);
+  location.replace("/setup-scope");
+})();
+</script>
+"""
 
 
 class DwarfiumError(Exception):
@@ -123,12 +147,31 @@ def install() -> dict:
     return {"version": rel["tag"], "folder": str(dest), "sha256": rel["digest"], "programs": executables}
 
 
+def _web_roots() -> list[Path]:
+    """Folders Dwarfium's web server serves (the ones holding its index.html and _next)."""
+    inst = installed()
+    if not inst:
+        return []
+    base = Path(inst["folder"])
+    return [p.parent for p in base.rglob("index.html") if (p.parent / "_next").is_dir()]
+
+
+def prepare_autofill() -> bool:
+    roots = _web_roots()
+    for root in roots:
+        target = root / HELPER_NAME
+        if not target.exists() or target.read_text(encoding="utf-8") != HELPER_HTML:
+            target.write_text(HELPER_HTML, encoding="utf-8")
+    return bool(roots)
+
+
 def start() -> dict:
     inst = installed()
     if not inst:
         raise DwarfiumError("Dwarfium's browser edition isn't installed yet.")
     if running():
         return {"already_running": True}
+    prepare_autofill()
     launcher = Path(inst["launcher"])
     if sys.platform == "win32":
         # The launcher's name contains "&", so it must stay inside quotes for cmd.

@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, tools, update
+from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update
 
 RESTART_EXIT_CODE = 3  # start-windows.bat relaunches the app when it exits with this code
 
@@ -110,7 +110,10 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/dwarfium/status":
                 return self._json(dwarfium_web.status())
             if url.path == "/api/dwarf/sessions":
-                return self._json({"sessions": dwarf.list_sessions(), "library": str(dwarf.library_dir())})
+                return self._json({"sessions": dwarf.list_sessions(q.get("via", "wifi")),
+                                   "library": str(dwarf.library_dir())})
+            if url.path == "/api/dwarf/usb":
+                return self._json({"folders": scope.usb_folders()})
             if url.path == "/api/dwarf/session":
                 return self._json(dwarf.session_files(q.get("root", ""), q.get("name", "")))
         except (update.UpdateError, dwarf.DwarfError, dwarfium_web.DwarfiumError) as e:
@@ -124,7 +127,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(a or {"error": "not found"}, 200 if a else 404)
         if url.path.startswith("/api/job/"):
             job = tools.JOBS.get(url.path.rsplit("/", 1)[1])
-            return self._json(job or {"error": "not found"}, 200 if job else 404)
+            return self._json({k: v for k, v in job.items() if k != "proc"} if job else {"error": "not found"},
+                              200 if job else 404)
         return self._send(404, b"Not found", "text/plain")
 
     def do_POST(self):
@@ -214,6 +218,20 @@ class Handler(BaseHTTPRequestHandler):
                                                               "Downloading Dwarfium from its official GitHub release")})
             if path == "/api/dwarfium/start":
                 return self._json(dwarfium_web.start())
+            if path == "/api/dwarfium/autofill":
+                return self._json({"ready": dwarfium_web.prepare_autofill(), "url": dwarfium_web.web_url(),
+                                   "page": dwarfium_web.HELPER_NAME})
+            if path == "/api/scope/scan":
+                return self._json({"job_id": tools.start_task(scope.scan, "Searching the local network for your DWARF")})
+            if path == "/api/scope/stop":
+                out = {"jobs_stopped": tools.stop_jobs()}
+                cfg = config.load()
+                try:
+                    out["telescope"] = scope.stop_all((cfg.get("dwarf_ip") or "").strip(),
+                                                      int(cfg.get("dwarf_hardware_id") or 2))
+                except (scope.ScopeError, OSError) as e:
+                    out["telescope_error"] = str(e)
+                return self._json(out)
             if path == "/api/update/install":
                 result = update.install()
                 _restart_soon()
@@ -235,7 +253,8 @@ class Handler(BaseHTTPRequestHandler):
                 a = history.get_assessment(int(body["assessment_id"]))
                 script = body.get("script") or a["assessment"].get("siril_script_text")
                 return self._json({"job_id": tools.run_siril_script(body.get("path") or a["file_path"], script)})
-        except (assess.AssessmentError, update.UpdateError, dwarf.DwarfError, dwarfium_web.DwarfiumError) as e:
+        except (assess.AssessmentError, update.UpdateError, dwarf.DwarfError, dwarfium_web.DwarfiumError,
+                scope.ScopeError) as e:
             return self._json({"error": str(e)}, 400)
         except (FileNotFoundError, ValueError, KeyError) as e:
             return self._json({"error": str(e)}, 400)

@@ -184,16 +184,39 @@ def _run_job(job_id: str, steps: list[tuple[str, callable, str | None]], result_
         for label, make_args, cwd in steps:
             job["log"].append(f"$ {label}")
             args = make_args()
-            proc = subprocess.run(args, capture_output=True, text=True, cwd=cwd, timeout=1800)
-            tail = (proc.stdout or "")[-3000:] + (proc.stderr or "")[-2000:]
+            proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd,
+                                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+            job["proc"] = proc
+            try:
+                stdout, stderr = proc.communicate(timeout=1800)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                stdout, stderr = proc.communicate()
+            job.pop("proc", None)
+            tail = (stdout or "")[-3000:] + (stderr or "")[-2000:]
             job["log"].append(tail.strip())
+            if job["state"] == "stopped":
+                return
             if proc.returncode != 0:
                 raise RuntimeError(f"{label} exited with code {proc.returncode}")
         job["output"] = result_path()
         job["state"] = "done"
     except Exception as e:  # report every failure back to the page
-        job["state"] = "failed"
-        job["error"] = str(e)
+        if job["state"] != "stopped":
+            job["state"] = "failed"
+            job["error"] = str(e)
+
+
+def stop_jobs() -> int:
+    """Kill every GraXpert/Siril run still going. Returns how many were stopped."""
+    stopped = 0
+    for job in list(JOBS.values()):
+        proc = job.get("proc")
+        if job["state"] == "running" and proc and proc.poll() is None:
+            job["state"], job["error"] = "stopped", "Stopped by Stop all."
+            proc.kill()
+            stopped += 1
+    return stopped
 
 
 def _start(steps, result_path) -> str:

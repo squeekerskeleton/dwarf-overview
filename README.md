@@ -66,10 +66,14 @@ Every assessment also includes:
 
 ## Getting files straight from the telescope
 
+**Over Wi-Fi:**
 1. In the DWARFLAB app, put the DWARF 3 on your Wi-Fi (STA mode), or join the telescope's own hotspot with your laptop.
-2. Find the telescope's IP address in the DWARFLAB app or in Dwarfium.
-3. Enter the address in Settings.
-4. On the **From DWARF** tab, click **Load sessions** and pick a session. The stacked files are pre-selected. Click **Copy to laptop and measure**.
+2. On the **From DWARF** tab, click **Find my DWARF**. The app searches only your local network (the subnet your laptop is on, plus the DWARF hotspot address 192.168.88.1), confirms the telescope by asking it for its device info, and saves its address. Nothing is sent outside your network.
+3. Click **Load sessions** and pick a session. The stacked files are pre-selected. Click **Copy to laptop and measure**.
+
+**Over USB-C:** plug the DWARF in and switch it on. It shows up as a drive, and the From DWARF tab switches to **USB-C** by itself. Load sessions and copy them the same way, with no Wi-Fi needed.
+
+The DWARF 3 only offers file access over USB-C. Its firmware has no way to control the telescope through the cable, so goto, tracking, Stop all and Dwarfium always need Wi-Fi (home Wi-Fi or the telescope's hotspot).
 
 Files go to `Pictures\DWARF Library` (you can change this in Settings). Nothing on the telescope is changed or deleted.
 
@@ -82,11 +86,17 @@ The **Telescope** tab gives you full control of the DWARF from the app: goto and
    - It checks the download against the SHA-256 checksum GitHub publishes for that file, and refuses to unpack it if they don't match.
    - Windows Defender scans it as usual.
 2. Click **Start Dwarfium**. A console window opens for Dwarfium's helper services. Leave it open, but you can minimise it. If Windows asks about network access for *DwarfiumProxy* or *mediamtx*, allow it on private networks only.
-3. Dwarfium appears in the tab. Under **Fleet → Add telescope**, enter the DWARF's IP address, then **Connect**.
+3. Dwarfium appears in the tab. Click **Find my DWARF** (or **Fill in Dwarfium** if it's already found). The app fills in the DWARF's address, your site's latitude and longitude (set them in Settings, or click *Use this laptop's location* there) and your time zone, and opens Dwarfium's connect page. Press **Connect**.
 4. If it says *Monitoring only*, the DWARFLAB phone app is holding control. Close the phone app, or turn off **Set Current Device as Host** in it, then click **Request control**.
 5. For the first-time Bluetooth Wi-Fi setup, click **Open in its own window**, because Bluetooth doesn't work inside the tab.
 
 You can also install the Dwarfium **desktop app** from the [Windows installer on its release page](https://github.com/acocalypso/dwarfium/releases). Once it's installed, an **Open Dwarfium** button appears at the top of this app. The installer isn't code-signed, so SmartScreen will warn you. Click **More info → Run anyway**.
+
+## Stop all
+
+The red **Stop all** button at the top works from any tab. After you confirm, it sends the DWARF every stop command it has: joystick and motors, goto, calibration, EQ solving, tracking (including the Sun/Moon and sentry modes), live stacking on both cameras, bursts, videos, timelapses and focusing. It also cancels any GraXpert or Siril run in progress. A live stack keeps the frames it already has. The result lists what was stopped; "declined" usually means that thing wasn't running.
+
+Stop all talks to the telescope directly over Wi-Fi, so it works even when Dwarfium isn't open. It needs the DWARF's address, which **Find my DWARF** sets.
 
 ## Updates
 

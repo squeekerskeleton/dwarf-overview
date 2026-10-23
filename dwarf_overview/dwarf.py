@@ -1,21 +1,25 @@
-"""Pull sessions straight off the DWARF 3 over Wi-Fi.
+"""Pull sessions straight off the DWARF 3, over Wi-Fi or a USB-C cable.
 
 The telescope serves its storage as a plain web directory listing at
 http://<dwarf-ip>/DWARF3/Astronomy/ (this is how Dwarfium's session browser
 reads it too). Each session folder holds shotsInfo.json, the stacked FITS and
 JPG, and optionally the individual subs. Files are copied into a local library
 folder and never deleted from the telescope.
+
+Over USB-C the DWARF appears as a drive with the same folders, so the same
+session list works with local paths instead of web addresses.
 """
 from __future__ import annotations
 
 import ipaddress
 import json
 import re
+import shutil
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import config
+from . import config, scope
 
 ROOTS = {"astro": "/DWARF3/Astronomy/", "dwarf2": "/sdcard/DWARF_II/Astronomy/"}
 SKIP_FOLDERS = re.compile(r"dwarf_dark|solving_failed|cali_frame", re.I)
@@ -60,7 +64,27 @@ def _listing(path: str) -> list[dict]:
     return out
 
 
-def list_sessions() -> list[dict]:
+def _usb_root(root: str) -> Path | None:
+    """The root as a local folder, if it's an Astronomy folder on a DWARF plugged in over USB-C."""
+    return Path(root) if root in scope.usb_folders() else None
+
+
+def _local_sessions(folder: str) -> list[dict]:
+    from datetime import datetime
+    out = []
+    for d in Path(folder).iterdir():
+        if d.is_dir() and not SKIP_FOLDERS.search(d.name):
+            out.append({"name": d.name, "root": folder,
+                        "date": datetime.fromtimestamp(d.stat().st_mtime).strftime("%d-%b-%Y %H:%M")})
+    return sorted(out, key=lambda s: s["name"], reverse=True)
+
+
+def list_sessions(via: str = "wifi") -> list[dict]:
+    if via == "usb":
+        folders = scope.usb_folders()
+        if not folders:
+            raise DwarfError("No DWARF found over USB-C. Plug it in, switch it on, and wait for the drive to appear.")
+        return _local_sessions(folders[0])
     last_error = None
     for root in ROOTS.values():
         try:
@@ -76,7 +100,20 @@ def list_sessions() -> list[dict]:
 
 
 def session_files(root: str, name: str) -> dict:
-    if root not in ROOTS.values() or "/" in name or ".." in name:
+    if "/" in name or "\\" in name or ".." in name:
+        raise DwarfError("Bad session name.")
+    usb = _usb_root(root)
+    if usb:
+        folder = usb / name
+        entries = [{"name": f.name, "dir": False, "date": "", "size": f"{f.stat().st_size / 1e6:.1f}M"}
+                   for f in sorted(folder.iterdir()) if f.is_file()]
+        try:
+            info = json.loads((folder / "shotsInfo.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            info = {}
+        return {"files": entries, "shot_info": info,
+                "suggested": [e["name"] for e in entries if WANTED.match(e["name"])]}
+    if root not in ROOTS.values():
         raise DwarfError("Bad session name.")
     entries = [e for e in _listing(f"{root}{name}/") if not e["dir"]]
     info = {}
@@ -97,7 +134,8 @@ def library_dir() -> Path:
 
 
 def download(root: str, name: str, files: list[str]) -> dict:
-    if root not in ROOTS.values() or "/" in name or ".." in name:
+    usb = _usb_root(root)
+    if (root not in ROOTS.values() and not usb) or "/" in name or "\\" in name or ".." in name:
         raise DwarfError("Bad session name.")
     dest = library_dir() / re.sub(r'[<>:"|?*\\/]', "_", name)
     dest.mkdir(parents=True, exist_ok=True)
@@ -107,6 +145,15 @@ def download(root: str, name: str, files: list[str]) -> dict:
             continue
         target = dest / f
         tmp = target.with_suffix(target.suffix + ".part")
+        if usb:
+            try:
+                shutil.copyfile(usb / name / f, tmp)
+            except OSError as e:
+                tmp.unlink(missing_ok=True)
+                raise DwarfError(f"Copying {f} failed: {e}")
+            tmp.replace(target)
+            saved.append(str(target))
+            continue
         try:
             with urllib.request.urlopen(_base() + urllib.parse.quote(f"{root}{name}/{f}"), timeout=30) as r, \
                     open(tmp, "wb") as out:

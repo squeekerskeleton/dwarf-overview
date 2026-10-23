@@ -18,6 +18,8 @@
   button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; }
   button:hover { border-color: var(--accent); }
   button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  button.stopall { background: #b62324; border-color: #f85149; color: #fff; font-weight: 600; }
+  button.stopall:hover { background: #da3633; border-color: #fff; }
   button:disabled { opacity: .5; cursor: default; }
   button.tab.active { border-color: var(--accent); color: var(--accent); }
   input, textarea, select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; width: 100%; }
@@ -97,7 +99,10 @@
   <span id="keyStatus" class="muted"></span>
   <button id="nightBtn" title="Dim orange night-vision mode for use in the field">Night mode</button>
   <button id="settingsBtn">Settings</button>
+  <button id="stopAll" class="stopall" title="Stop the telescope moving, tracking, capturing and focusing, and stop any GraXpert or Siril run">Stop all</button>
 </header>
+<dialog id="stopDlg"><h2 style="margin-top:0">Stop all</h2><div id="stopOut"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:12px"><button id="stopClose">Close</button></div></dialog>
 
 <div id="updateBanner" class="hidden" style="background:#1f3a5f;padding:10px 16px;border-bottom:1px solid var(--line)">
   <div class="row"><b id="updTitle"></b><span class="spacer" style="flex:1"></span><button class="primary" id="updInstall">Install and restart</button><button id="updLater">Later</button></div>
@@ -186,6 +191,9 @@
   <div class="row" style="padding:8px 16px;border-bottom:1px solid var(--line);background:var(--panel)">
     <b>Telescope control</b><span class="muted">powered by Dwarfium</span><span id="scopeStatus" class="muted"></span>
     <span class="spacer" style="flex:1"></span>
+    <span id="scopeDwarf" class="muted"></span>
+    <button id="scopeFind" title="Search this laptop's local network for the DWARF">Find my DWARF</button>
+    <button id="scopeFill" title="Put the DWARF's address, your site and time zone into Dwarfium">Fill in Dwarfium</button>
     <button id="scopeStart" class="hidden">Start Dwarfium</button>
     <button id="scopeInstall" class="hidden">Install Dwarfium</button>
     <button id="scopeReload">Reload</button>
@@ -198,8 +206,9 @@
 
 <section id="dwarfTab" class="hidden" style="padding:16px">
   <div class="card"><h2>Sessions on the telescope</h2>
-    <p class="muted">Reads the DWARF over Wi-Fi, the same way Dwarfium's session browser does. Put the DWARF on your home Wi-Fi (STA mode in the DWARFLAB app) or join its hotspot, and set its IP address in Settings. Files are copied to your library; nothing on the telescope is changed.</p>
-    <div class="row"><button class="primary" id="dwRefresh">Load sessions</button><span id="dwStatus" class="muted"></span></div>
+    <p class="muted">Over <b>Wi-Fi</b>, put the DWARF on your home Wi-Fi (STA mode in the DWARFLAB app) or join its hotspot, then click Find my DWARF. Over <b>USB-C</b>, plug it in and switch it on; it shows up as a drive. Files are copied to your library; nothing on the telescope is changed.</p>
+    <div class="row"><span class="modebar"><button id="viaWifi" class="on">Wi-Fi</button><button id="viaUsb">USB-C</button></span>
+      <button class="primary" id="dwRefresh">Load sessions</button><button id="dwFind">Find my DWARF</button><span id="dwStatus" class="muted"></span></div>
     <div class="grid2" style="margin-top:10px"><div><ul id="dwSessions" style="list-style:none;padding:0;margin:0;max-height:60vh;overflow:auto"></ul></div>
       <div id="dwDetail"></div></div></div>
 </section>
@@ -229,8 +238,11 @@
       <div><label for="otherPath">its .exe</label><input id="otherPath"></div></div>
   </details>
   <label for="startFolder">Start the file browser in</label><input id="startFolder">
-  <div class="grid2"><div><label for="dwarfIp">DWARF IP address (for From DWARF)</label><input id="dwarfIp" placeholder="e.g. 192.168.1.42"></div>
+  <div class="grid2"><div><label for="dwarfIp">DWARF IP address (Find my DWARF fills this in)</label><input id="dwarfIp" placeholder="e.g. 192.168.1.42"></div>
     <div><label for="libFolder">Save DWARF downloads to</label><input id="libFolder" placeholder="Pictures\DWARF Library"></div></div>
+  <div class="grid2"><div><label for="siteLat">Your site's latitude (for Dwarfium)</label><input id="siteLat" placeholder="e.g. 48.77"></div>
+    <div><label for="siteLon">longitude (west is negative)</label><input id="siteLon" placeholder="e.g. -104.56"></div></div>
+  <div class="row" style="margin-top:6px"><button id="siteHere" type="button">Use this laptop's location</button><span id="siteStatus" class="caption"></span></div>
   <label for="astapPath">ASTAP plate solver (leave blank to auto-detect)</label><input id="astapPath">
   <label for="dwarfiumPath">Dwarfium desktop app (leave blank to auto-detect)</label><input id="dwarfiumPath">
   <label for="dwarfiumWeb">Dwarfium web address (for the Telescope tab)</label><input id="dwarfiumWeb" placeholder="http://127.0.0.1:8000">
@@ -301,7 +313,7 @@ $("settingsBtn").onclick = () => {
   $("model").value = cfg.model; $("effort").value = cfg.effort; $("sirilPath").value = cfg.siril_path;
   $("gxPath").value = cfg.graxpert_path; $("startFolder").value = cfg.start_folder;
   $("ppPath").value = cfg.pipp_path; $("asPath").value = cfg.autostakkert_path; $("rxPath").value = cfg.registax_path;
-  $("dwarfIp").value = cfg.dwarf_ip; $("libFolder").value = cfg.library_folder; $("dwarfiumPath").value = cfg.dwarfium_path; $("astapPath").value = cfg.astap_path; $("dwarfiumWeb").value = cfg.dwarfium_web_url; $("updateUrl").value = cfg.update_url;
+  $("dwarfIp").value = cfg.dwarf_ip; $("siteLat").value = cfg.site_lat; $("siteLon").value = cfg.site_lon; $("siteStatus").textContent = ""; $("libFolder").value = cfg.library_folder; $("dwarfiumPath").value = cfg.dwarfium_path; $("astapPath").value = cfg.astap_path; $("dwarfiumWeb").value = cfg.dwarfium_web_url; $("updateUrl").value = cfg.update_url;
   $("imPath").value = cfg.imppg_path; $("otherName").value = cfg.other_app_name; $("otherPath").value = cfg.other_app_path;
   const t = cfg.tools, f = (v) => v ? '<span class="ok">found</span>' : '<span class="error">not found</span>';
   $("toolStatus").innerHTML = `GraXpert: ${f(t.graxpert)} &middot; Siril: ${f(t.siril)} &middot; siril-cli: ${f(t.siril_cli)}<br>ASTAP: ${f(t.astap)} &middot; Dwarfium: ${f(t.dwarfium)} &middot; PIPP: ${f(t.pipp)} &middot; AutoStakkert: ${f(t.autostakkert)} &middot; RegiStax: ${f(t.registax)} &middot; ImPPG: ${f(t.imppg)}<br>Data folder: ${esc(cfg.data_dir)}`;
@@ -312,9 +324,17 @@ $("saveSettings").onclick = async () => {
   cfg = await api("/api/config", { api_key: $("apiKey").value, model: $("model").value.trim(), effort: $("effort").value,
     siril_path: $("sirilPath").value.trim(), graxpert_path: $("gxPath").value.trim(), start_folder: $("startFolder").value.trim(),
     pipp_path: $("ppPath").value.trim(), autostakkert_path: $("asPath").value.trim(), registax_path: $("rxPath").value.trim(),
-    imppg_path: $("imPath").value.trim(), dwarf_ip: $("dwarfIp").value.trim(), library_folder: $("libFolder").value.trim(),
+    imppg_path: $("imPath").value.trim(), dwarf_ip: $("dwarfIp").value.trim(), site_lat: $("siteLat").value.trim(), site_lon: $("siteLon").value.trim(), library_folder: $("libFolder").value.trim(),
     dwarfium_path: $("dwarfiumPath").value.trim(), astap_path: $("astapPath").value.trim(), dwarfium_web_url: $("dwarfiumWeb").value.trim(), update_url: $("updateUrl").value.trim(), other_app_name: $("otherName").value.trim(), other_app_path: $("otherPath").value.trim() });
   $("settings").close(); loadConfig();
+};
+$("siteHere").onclick = () => {
+  if (!navigator.geolocation) { $("siteStatus").textContent = "This browser can't read the location."; return; }
+  $("siteStatus").textContent = "Asking Windows for the location…";
+  navigator.geolocation.getCurrentPosition((pos) => {
+    $("siteLat").value = pos.coords.latitude.toFixed(4); $("siteLon").value = pos.coords.longitude.toFixed(4);
+    $("siteStatus").textContent = "Filled in. Click Save.";
+  }, (e) => { $("siteStatus").textContent = "Couldn't get it (" + e.message + "). Type it in instead."; }, { timeout: 15000 });
 };
 $("clearKey").onclick = async () => { cfg = await api("/api/config", { clear_api_key: true }); $("settings").close(); loadConfig(); };
 $("nightBtn").onclick = () => { document.body.classList.toggle("night"); try { localStorage.setItem("night", document.body.classList.contains("night") ? "1" : ""); } catch (e) {} };
@@ -327,7 +347,8 @@ document.querySelectorAll(".tab").forEach((b) => b.onclick = () => {
   $("historyTab").classList.toggle("hidden", b.dataset.tab !== "history");
   $("dwarfTab").classList.toggle("hidden", b.dataset.tab !== "dwarf");
   $("scopeTab").classList.toggle("hidden", b.dataset.tab !== "scope");
-  if (b.dataset.tab === "scope") loadScope();
+  if (b.dataset.tab === "scope") { loadScope(); showDwarfAddr(); }
+  if (b.dataset.tab === "dwarf") api("/api/dwarf/usb").then((u) => { if (u.folders.length) setVia("usb"); }).catch(() => {});
   if (b.dataset.tab === "history") loadHistory();
 });
 
@@ -655,11 +676,76 @@ $("scopeInstall").onclick = async () => {
   } catch (e) { alert(e.message); }
 };
 
+// ---------------- find the DWARF, fill in Dwarfium, stop all
+function showDwarfAddr() { $("scopeDwarf").textContent = cfg.dwarf_ip ? `DWARF at ${cfg.dwarf_ip}` : "DWARF not found yet"; }
+async function findDwarf(statusEl) {
+  statusEl.innerHTML = '<span class="spinner"></span> Searching your local network for the DWARF&hellip;';
+  try {
+    const { job_id } = await api("/api/scope/scan", {});
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const j = await api("/api/job/" + job_id);
+      if (j.state === "running") continue;
+      if (j.state !== "done") throw new Error(j.error || "The search failed.");
+      const devs = j.output.devices;
+      if (!devs.length) {
+        statusEl.innerHTML = `<span class="error">No DWARF found.</span> Searched ${esc(j.output.searched.join(", "))}. Make sure the DWARF is on and the laptop is on the same Wi-Fi or the DWARF's hotspot.`;
+        return null;
+      }
+      let d = devs[0];
+      if (devs.length > 1) {
+        const n = parseInt(prompt("More than one DWARF found. Which one?\n" + devs.map((x, i) => `${i + 1}: ${x.name} (${x.model}) at ${x.ip}`).join("\n"), "1"), 10);
+        d = devs[(n || 1) - 1] || devs[0];
+      }
+      cfg = await api("/api/config", { dwarf_ip: d.ip, dwarf_hardware_id: d.hardware_id });
+      showDwarfAddr();
+      statusEl.innerHTML = `<span class="ok">Found ${esc(d.name)}</span> (${esc(d.model)}) at ${esc(d.ip)}. Saved.`;
+      return d;
+    }
+  } catch (e) { statusEl.innerHTML = `<span class="error">${esc(e.message)}</span>`; return null; }
+}
+async function fillDwarfium() {
+  if (!cfg.dwarf_ip && !(await findDwarf($("scopeStatus")))) return;
+  const r = await api("/api/dwarfium/autofill", {});
+  if (!r.ready) {
+    alert(`Dwarfium's browser edition isn't installed by this app, so it can't be filled in automatically. In Dwarfium's Connect page, enter ${cfg.dwarf_ip}.`);
+    return;
+  }
+  const hash = new URLSearchParams({ ip: cfg.dwarf_ip, tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "" });
+  if (cfg.site_lat !== "" && cfg.site_lon !== "") { hash.set("lat", cfg.site_lat); hash.set("lon", cfg.site_lon); }
+  $("scopeFrame").src = `${r.url}/${r.page}#${hash}`;
+  $("scopeStatus").innerHTML = `<span class="ok">Filled in.</span> Press <b>Connect</b> in Dwarfium.` + (cfg.site_lat === "" ? " Add your site's location in Settings to fill that in too." : "");
+}
+$("scopeFind").onclick = async () => { if (await findDwarf($("scopeStatus"))) fillDwarfium(); };
+$("scopeFill").onclick = () => fillDwarfium().catch((e) => alert(e.message));
+$("dwFind").onclick = () => findDwarf($("dwStatus"));
+$("stopAll").onclick = async () => {
+  if (!confirm("Stop everything? The telescope stops moving, tracking, capturing and focusing (a live stack keeps what it has so far), and any GraXpert or Siril run is cancelled.")) return;
+  $("stopOut").innerHTML = '<span class="spinner"></span> Stopping&hellip;'; $("stopDlg").showModal();
+  try {
+    const r = await api("/api/scope/stop", {});
+    let html = `<p>Processing runs stopped: ${r.jobs_stopped}</p>`;
+    if (r.telescope_error) html += `<p class="error">Telescope: ${esc(r.telescope_error)}</p>`;
+    else {
+      const t = r.telescope, stopped = t.results.filter((x) => x.result === "stopped").map((x) => x.what);
+      html += `<p>Telescope at ${esc(t.ip)}: sent ${t.sent} stop commands, ${t.acknowledged} answered.</p>` +
+        (stopped.length ? `<p class="ok">Stopped: ${esc(stopped.join(", "))}</p>` : "") +
+        `<details><summary class="muted">Every command</summary>${t.results.map((x) => `<div>${esc(x.what)}: ${esc(x.result)}</div>`).join("")}<p class="caption">"Declined" usually means that thing wasn't running.</p></details>`;
+    }
+    $("stopOut").innerHTML = html;
+  } catch (e) { $("stopOut").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+};
+$("stopClose").onclick = () => $("stopDlg").close();
+
 // ---------------- from DWARF
+let dwVia = "wifi";
+function setVia(v) { dwVia = v; $("viaWifi").classList.toggle("on", v === "wifi"); $("viaUsb").classList.toggle("on", v === "usb"); $("dwFind").classList.toggle("hidden", v === "usb"); }
+$("viaWifi").onclick = () => setVia("wifi");
+$("viaUsb").onclick = () => setVia("usb");
 $("dwRefresh").onclick = async () => {
   $("dwStatus").innerHTML = '<span class="spinner"></span> Contacting the DWARF&hellip;'; $("dwSessions").innerHTML = ""; $("dwDetail").innerHTML = "";
   try {
-    const d = await api("/api/dwarf/sessions");
+    const d = await api("/api/dwarf/sessions?via=" + dwVia);
     $("dwStatus").textContent = `${d.sessions.length} sessions. Downloads go to ${d.library}`;
     $("dwSessions").innerHTML = d.sessions.map((x, i) => `<li data-i="${i}" style="padding:6px;border-bottom:1px solid var(--line);cursor:pointer">${esc(x.name)} <span class="muted">${esc(x.date)}</span></li>`).join("");
     $("dwSessions").querySelectorAll("li").forEach((li) => li.onclick = () => showDwarfSession(d.sessions[+li.dataset.i]));
