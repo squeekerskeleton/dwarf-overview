@@ -165,6 +165,21 @@ Projects and photos both have notes, which save as you type.
 
 Settings has 30 earth tones. Pick a primary colour for highlights and tabs, and a secondary colour for the main buttons.
 
+## AWAY, reboot and auto-reconnect
+
+- **AWAY**, the brown button at the top, does two things:
+  1. It runs Stop all.
+  2. It sends the telescope to its home position so the lens is tucked away. It uses the same motor reset as Dwarfium's "Reset motors".
+
+  The banner shows each step. Use it before packing up, or when you walk away.
+- **Reboot DWARF** is in Settings. It restarts the telescope. The DWARF is offline for 1–2 minutes, and the app waits for it, then reconnects by itself.
+- **Auto-reconnect.** If the app's control link to the DWARF drops, the app searches for it 5 times, once a second:
+  - first its last address;
+  - then its hotspot, recently seen devices and the whole local network.
+
+  If it's found, the link is restored, at a new address if needed. If not, a red banner says so, with a **Connect again** button. If the link keeps dropping while the DWARF is still on the network, the banner says another app is probably taking control. It doesn't fight that app for control.
+- **Live view** now switches the DWARF's camera on by itself, the same way Dwarfium's Camera page does. You don't need to open Dwarfium first.
+
 ## Stop all
 
 The red **Stop all** button at the top works from any tab. After you confirm, it sends the DWARF every stop command it has: joystick and motors, goto, calibration, EQ solving, tracking (including the Sun/Moon and sentry modes), live stacking on both cameras, bursts, videos, timelapses and focusing. It also cancels any GraXpert or Siril run in progress. A live stack keeps the frames it already has. The result lists what was stopped; "declined" usually means that thing wasn't running.

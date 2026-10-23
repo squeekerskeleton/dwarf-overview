@@ -330,6 +330,16 @@ class Handler(BaseHTTPRequestHandler):
                 use_claude = bool(body.pop("use_claude", True))
                 return self._json({"job_id": tools.start_task(lambda: diagnose.run(body, shot, use_claude),
                                                               "Looking at what's going wrong")})
+            if path == "/api/scope/away":
+                holder: dict = {}
+                note = lambda m: tools.JOBS.get(holder.get("id"), {"log": []})["log"].append(m)
+                holder["id"] = tools.start_task(lambda: control.away(note),
+                                                "AWAY: stopping everything and tucking the lens away")
+                return self._json({"job_id": holder["id"]})
+            if path == "/api/scope/reboot":
+                return self._json(control.reboot())
+            if path == "/api/live/start":
+                return self._json(liveview.start(str(body.get("camera") or "tele")))
             if path == "/api/diagnose/fix":
                 return self._json(diagnose.apply(str(body["action"]), str(body.get("value") or "")))
             if path == "/api/net/diagnose":
@@ -375,7 +385,7 @@ class Handler(BaseHTTPRequestHandler):
                 script = body.get("script") or a["assessment"].get("siril_script_text")
                 return self._json({"job_id": tools.run_siril_script(body.get("path") or a["file_path"], script)})
         except (assess.AssessmentError, update.UpdateError, dwarf.DwarfError, dwarfium_web.DwarfiumError,
-                scope.ScopeError, control.ControlError, projects.ProjectError, netcheck.NetError, diagnose.DiagnoseError, KeyError) as e:
+                scope.ScopeError, control.ControlError, projects.ProjectError, netcheck.NetError, diagnose.DiagnoseError, liveview.LiveError, KeyError) as e:
             return self._json({"error": str(e)}, 400)
         except (FileNotFoundError, ValueError, KeyError) as e:
             return self._json({"error": str(e)}, 400)

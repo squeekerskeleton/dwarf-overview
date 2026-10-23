@@ -1,6 +1,6 @@
 {
-  "version": "0.5.2",
-  "notes": "New Diagnose button: show Claude what you're seeing (screenshot plus the app's state and recent errors), get the likely cause, steps, and one-click fixes.",
-  "sha256": "de16bba54208f751ad1bee8eb9079d1f131f510438daa0e802c51bd0c625740c",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.5.2.zip"
+  "version": "0.6.0",
+  "notes": "AWAY button (stop everything and tuck the lens away), Reboot DWARF in Settings, auto-reconnect (5 searches, once a second, then a clear error), and live view now switches the camera on itself.",
+  "sha256": "f53d6b7827d7a0bd64bc0ac4f42470cda2d826f741dfedaf23986d4ff5c630e2",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.0.zip"
 }

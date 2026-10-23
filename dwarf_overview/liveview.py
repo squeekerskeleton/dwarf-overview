@@ -1,7 +1,9 @@
 """Live view from the DWARF's camera, turned into a stream the page can show.
 
 The DWARF 3 streams its telephoto (ch0) and wide (ch1) cameras over RTSP on
-port 554, the same feed Dwarfium uses. OpenCV reads it and the frames are
+port 554, the same feed Dwarfium uses. The video only flows once the camera is
+switched on, so the app does that first (control.open_preview), as Dwarfium's
+Camera page does. OpenCV reads it and the frames are
 served to the page as an MJPEG stream. One reader runs per camera and stops a
 few seconds after the last viewer leaves.
 """
@@ -14,6 +16,7 @@ import time
 from . import config, scope
 
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+OPEN_TRIES = 5
 
 
 class LiveError(Exception):
@@ -38,9 +41,21 @@ class _Reader:
             self.error = "Live view needs opencv; run the launcher again to install it."
             self.alive = False
             return
-        cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
-        if not cap.isOpened():
-            self.error = "The DWARF's live stream didn't open. Open the camera in Dwarfium once, then try again."
+        cap = None
+        for attempt in range(OPEN_TRIES):  # the stream takes a moment to start after the camera opens
+            params = [getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", 53), 4000, getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", 54), 5000]
+            try:
+                cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG, params)
+            except TypeError:  # older OpenCV without open parameters
+                cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
+            if cap.isOpened():
+                break
+            cap.release()
+            cap = None
+            time.sleep(1)
+        if cap is None:
+            self.error = (f"The camera is on but its video stream didn't start after {OPEN_TRIES} tries. "
+                          "Another app may be using the camera; close it and click Show live view again.")
             self.alive = False
             with self.cv:
                 self.cv.notify_all()
@@ -77,10 +92,20 @@ _LOCK = threading.Lock()
 
 
 def _reader(camera: str) -> _Reader:
+    from . import control
     ip = (config.load().get("dwarf_ip") or "").strip()
     if not scope._is_local(ip):
-        raise LiveError("Find your DWARF first.")
+        raise LiveError("Find your DWARF first (Network tab or Plan & Control).")
     url = f"rtsp://{ip}:554/ch{0 if camera == 'tele' else 1}/stream0"
+    with _LOCK:
+        r = _READERS.get(url)
+        if r and r.alive:
+            return r
+    # Turn the camera's video on first, so there's no need to open Dwarfium's Camera page.
+    try:
+        control.open_preview(camera)
+    except control.ControlError as e:
+        raise LiveError(f"Couldn't switch the DWARF's camera on: {e}")
     with _LOCK:
         r = _READERS.get(url)
         if not r or not r.alive:
@@ -106,3 +131,14 @@ def frames(camera: str = "tele"):
     finally:
         r.viewers -= 1
         r.last_viewer = time.monotonic()
+
+
+def start(camera: str = "tele", timeout: float = 30) -> dict:
+    """Switch the camera on and wait for the first picture, so the page can show a clear error if it fails."""
+    r = _reader(camera)
+    with r.cv:
+        r.cv.wait_for(lambda: r.frame is not None or not r.alive, timeout=timeout)
+    if r.frame is None:
+        raise LiveError(r.error or "The camera is on but no picture arrived. Click Show live view again.")
+    r.last_viewer = time.monotonic()  # keep it running while the page connects
+    return {"ok": True, "camera": camera}

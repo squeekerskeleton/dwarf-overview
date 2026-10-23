@@ -205,8 +205,107 @@ def _ok(r: dict, what: str) -> dict:
 
 # ---------------------------------------------------------------- actions
 
+# ---------------------------------------------------------------- auto-reconnect
+
+RETRIES, RETRY_SPACING, PROBE_TIMEOUT = 5, 1.0, 0.8
+_WANTED = False      # the user connected and hasn't clicked Disconnect
+_RECON = {"state": "idle", "attempt": 0, "error": None, "at": None, "drops": []}
+_RECON_LOCK = threading.Lock()
+_RUNNING = threading.Lock()
+
+
+def _probe_once(saved: str) -> dict | None:
+    """One quick search: the last-known address first, then the hotspot, recent devices and the whole local network."""
+    from concurrent.futures import ThreadPoolExecutor
+    if scope._is_local(saved) and scope._port_open(saved, 8082, PROBE_TIMEOUT):
+        d = scope.device_info(saved, timeout=PROBE_TIMEOUT)
+        if d:
+            return d
+    mine = scope.local_addresses()
+    cands = [scope.HOTSPOT_IP] + scope._neighbours()
+    for net in scope.local_networks(mine)[:4]:
+        cands += [str(h) for h in net.hosts()]
+    cands = [c for c in dict.fromkeys(cands) if c not in mine and c != saved]
+    with ThreadPoolExecutor(max_workers=256) as pool:
+        hosts = [h for h, ok in zip(cands, pool.map(lambda h: scope._port_open(h, 8082, 0.5), cands)) if ok]
+        for d in pool.map(lambda h: scope.device_info(h, timeout=PROBE_TIMEOUT), hosts):
+            if d:
+                return d
+    return None
+
+
+def _reconnect_loop() -> None:
+    global _LINK, _WANTED
+    now = time.time()
+    with _RECON_LOCK:
+        drops = [t for t in _RECON["drops"] if now - t < 120] + [now]
+        _RECON.update(state="reconnecting", attempt=0, error=None, at=now, drops=drops)
+    saved = (config.load().get("dwarf_ip") or "").strip()
+    if len(drops) >= 3 and scope.device_info(saved, timeout=PROBE_TIMEOUT):
+        # The DWARF is still there but keeps dropping us: another app is most likely taking control.
+        _WANTED = False
+        with _RECON_LOCK:
+            _RECON.update(state="failed", error="The DWARF dropped this app's link 3 times in 2 minutes while still on the "
+                          "network. Another app (the DWARFLAB phone app or Dwarfium) is most likely taking control. "
+                          "Close the other app, then click Connect.")
+        return
+    last = ""
+    for attempt in range(1, RETRIES + 1):
+        if not _WANTED:
+            with _RECON_LOCK:
+                _RECON.update(state="idle")
+            return
+        start = time.monotonic()
+        with _RECON_LOCK:
+            _RECON["attempt"] = attempt
+        try:
+            d = _probe_once(saved)
+            if d:
+                if d["ip"] != saved:
+                    config.save({"dwarf_ip": d["ip"], "dwarf_hardware_id": d["hardware_id"]})
+                with _LINK_LOCK:
+                    _LINK = Link(d["ip"], d["hardware_id"])
+                _LINK.request(4, 13004, f_bool(1, True), timeout=4)
+                with _RECON_LOCK:
+                    _RECON.update(state="ok", error=None, at=time.time(), reconnected_to=d["ip"])
+                _watch()
+                return
+            last = "no DWARF answered"
+        except (OSError, ControlError) as e:
+            last = str(e)
+        time.sleep(max(0.0, RETRY_SPACING - (time.monotonic() - start)))
+    _WANTED = False
+    with _RECON_LOCK:
+        _RECON.update(state="failed", error=f"Lost the DWARF: searched {RETRIES} times, once a second, and it didn't answer "
+                      f"({last}). Check it's switched on and on your Wi-Fi (or its hotspot), then click Connect.")
+
+
+def _watch() -> None:
+    """Start a watcher for the current link; when it drops unexpectedly, run the reconnect loop."""
+    l = _LINK
+    if l is None or getattr(l, "watched", False):
+        return
+    l.watched = True
+
+    def run():
+        while not l.closed:
+            time.sleep(0.25)
+        if _WANTED and _LINK is l and _RUNNING.acquire(blocking=False):
+            try:
+                _reconnect_loop()
+            finally:
+                _RUNNING.release()
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def connect() -> dict:
+    global _WANTED
     l = link(connect=True)
+    _WANTED = True
+    with _RECON_LOCK:
+        _RECON.update(state="idle", attempt=0, error=None)
+    _watch()
     info = scope.device_info(l.ip) or {}
     try:
         lock = l.request(4, 13004, f_bool(1, True), timeout=6)["code"]
@@ -216,15 +315,134 @@ def connect() -> dict:
             "control_code": lock}
 
 
+def open_preview(camera: str = "tele") -> dict:
+    """Switch the camera's video stream on (what Dwarfium does when its Camera page opens).
+
+    enterCamera (14/16404), then the preview-quality request for that camera (tele 1/10050, wide 2/12036,
+    level 1). This only turns the video on: nothing moves, focuses or starts capturing.
+    """
+    l = link(connect=True)
+    if not _WANTED:
+        connect()
+    r = l.request(14, 16404, f_bytes(3, f_int(1, 1)), timeout=8)
+    if r["code"] != 0:
+        raise ControlError(f"The DWARF wouldn't open its camera (code {r['code']}). If the DWARFLAB phone app or "
+                           "Dwarfium is in control, close it and try again.")
+    module, cmd = (1, 10050) if camera == "tele" else (2, 12036)
+    try:
+        code = l.request(module, cmd, f_int(1, 1), timeout=5)["code"]
+    except ControlError:  # older firmware doesn't know this request; the camera is already on
+        code = None
+    return {"camera": camera, "preview_code": code}
+
+
+# ---------------------------------------------------------------- AWAY (stow) and reboot
+
+# Motor reset, the same four steps Dwarfium's "Reset motors" sends: each axis runs to its end stop and back
+# to the DWARF's home position, where the lens is tucked away, as after power-on.
+PARK_STEPS = [(1, True), (1, False), (2, False), (2, True)]
+
+
+def _await_final(l: "Link", module: int, cmd: int, data: bytes, timeout: float) -> int:
+    """Send a request and wait for its completion notice (type 3); fail early on an error reply."""
+    with l.cv:
+        l.replies.pop((module, cmd), None)
+    l.send(module, cmd, data)
+    end = time.monotonic() + timeout
+    with l.cv:
+        while True:
+            got = l.replies.get((module, cmd), [])
+            for r in got:
+                code = sint(one(parse(r["data"]), 1, 0))
+                if r["type"] == 3 or code != 0:
+                    return code
+            left = end - time.monotonic()
+            if left <= 0 or l.closed:
+                raise ControlError("The DWARF didn't finish moving in time." if not l.closed else
+                                   "The link to the DWARF dropped while it was moving.")
+            l.cv.wait(left)
+
+
+def away(progress=None) -> dict:
+    """Stop everything, then send the telescope home so the lens is tucked away."""
+    cfg = config.load()
+    ip, hw = (cfg.get("dwarf_ip") or "").strip(), int(cfg.get("dwarf_hardware_id") or 2)
+    stopped = scope.stop_all(ip, hw)
+    if progress:
+        progress("Stopped everything; sending the telescope home…")
+    time.sleep(1.0)
+    l = link(connect=True)
+    if not _WANTED:
+        connect()
+    for i, (motor, direction) in enumerate(PARK_STEPS, 1):
+        if progress:
+            progress(f"Moving to the home position ({i} of {len(PARK_STEPS)})…")
+        code = _await_final(l, 6, 14003, f_int(1, motor) + f_bool(2, direction), timeout=90)
+        if code != 0:
+            raise ControlError(f"The DWARF couldn't reach its home position (step {i}, code {code}). "
+                               "Everything is stopped; you can fold it by switching it off.")
+    return {"stopped": stopped.get("acknowledged"), "parked": True}
+
+
+def reboot() -> dict:
+    """Restart the DWARF. Its connection drops for a minute or two; the app then looks for it again."""
+    global _WANTED
+    l = link(connect=True)
+    was_connected = True
+    _WANTED = False  # don't treat the restart as a dropped link
+    l.send(5, 13505)
+    with _RECON_LOCK:
+        _RECON.update(state="rebooting", attempt=0, error=None, at=time.time())
+
+    def wait_for_it():
+        time.sleep(20)
+        saved = (config.load().get("dwarf_ip") or "").strip()
+        for i in range(36):  # up to 3 more minutes
+            with _RECON_LOCK:
+                _RECON["attempt"] = i + 1
+            d = None
+            try:
+                d = _probe_once(saved)
+            except Exception:
+                pass
+            if d:
+                if d["ip"] != saved:
+                    config.save({"dwarf_ip": d["ip"], "dwarf_hardware_id": d["hardware_id"]})
+                time.sleep(5)  # let it finish starting up
+                try:
+                    if was_connected:
+                        disconnect()
+                        connect()
+                    with _RECON_LOCK:
+                        _RECON.update(state="ok", error=None, at=time.time(), reconnected_to=d["ip"])
+                except ControlError as e:
+                    with _RECON_LOCK:
+                        _RECON.update(state="failed", error=f"The DWARF restarted but the app couldn't connect: {e}")
+                return
+            time.sleep(5)
+        with _RECON_LOCK:
+            _RECON.update(state="failed", error="The DWARF didn't come back within 3 minutes of restarting. Check it's on "
+                          "and on your Wi-Fi, then use Find my DWARF.")
+
+    threading.Thread(target=wait_for_it, daemon=True).start()
+    return {"rebooting": True}
+
+
 def status() -> dict:
     l = _LINK
+    with _RECON_LOCK:
+        recon = {k: v for k, v in _RECON.items() if k != "drops"}
     if not l or l.closed:
-        return {"connected": False}
-    return {"connected": True, "ip": l.ip, "goto": l.goto, "seconds_since_heard": round(time.monotonic() - l.last_rx, 1)}
+        return {"connected": False, "reconnect": recon}
+    return {"connected": True, "ip": l.ip, "goto": l.goto, "seconds_since_heard": round(time.monotonic() - l.last_rx, 1),
+            "reconnect": recon}
 
 
 def disconnect() -> dict:
-    global _LINK
+    global _LINK, _WANTED
+    _WANTED = False
+    with _RECON_LOCK:
+        _RECON.update(state="idle", attempt=0, error=None)
     if _LINK:
         _LINK.close()
         _LINK = None
