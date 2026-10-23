@@ -15,7 +15,9 @@ import time
 
 from . import config, scope
 
-os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+# TCP so no video packets are lost (lost packets show as gray smears until the next full frame).
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|max_delay;500000"
+SHOW_FPS = 12  # frames per second sent to the page; every frame is still decoded
 OPEN_TRIES = 4
 
 
@@ -60,10 +62,35 @@ class _Reader:
             with self.cv:
                 self.cv.notify_all()
             return
-        fails = 0
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+        # Decoding has to keep up with the DWARF or the stream falls apart, so this loop only grabs (decodes)
+        # frames; resizing and JPEG encoding happen on another thread, for the newest frame only.
+        latest = {"img": None}
+        ready = threading.Event()
+
+        def encoder():
+            while self.alive:
+                if not ready.wait(0.5):
+                    continue
+                ready.clear()
+                img = latest["img"]
+                if img is None:
+                    continue
+                h, w = img.shape[:2]
+                if w > 1280:
+                    img = cv2.resize(img, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_AREA)
+                ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if ok:
+                    with self.cv:
+                        self.frame = jpg.tobytes()
+                        self.cv.notify_all()
+        threading.Thread(target=encoder, daemon=True).start()
+        fails, last_shown = 0, 0.0
         while self.alive:
-            ok, img = cap.read()
-            if not ok:
+            if not cap.grab():
                 fails += 1
                 if fails > 50:
                     self.error = "The live stream stopped."
@@ -71,16 +98,16 @@ class _Reader:
                 time.sleep(0.05)
                 continue
             fails = 0
-            h, w = img.shape[:2]
-            if w > 1280:
-                img = cv2.resize(img, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_AREA)
-            ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            if ok:
-                with self.cv:
-                    self.frame = jpg.tobytes()
-                    self.cv.notify_all()
-            if self.viewers == 0 and time.monotonic() - self.last_viewer > 8:
+            now = time.monotonic()
+            if now - last_shown >= 1 / SHOW_FPS:
+                ok, img = cap.retrieve()
+                if ok:
+                    last_shown = now
+                    latest["img"] = img
+                    ready.set()
+            if self.viewers == 0 and now - self.last_viewer > 8:
                 break
+        self.alive = False
         cap.release()
         self.alive = False
         with self.cv:
