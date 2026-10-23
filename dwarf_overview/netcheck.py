@@ -321,7 +321,12 @@ def live() -> dict:
         d["reachable"] = d["rtt_ms"] is not None
         if d["rtt_ms"] is not None:
             d["rtt_ms"] = round(d["rtt_ms"], 1)
-            d["control_port"] = _connect_ms(ip, 9900, timeout=0.8) is not None
+            # The control port is checked at most every 30 s: the DWARF lets one app control it at a time,
+            # and frequent connections there are best left to the app that's in charge.
+            with _CACHE_LOCK:
+                if now - _CACHE.get("ctl_at", 0) > 30 or _CACHE.get("ctl_ip") != ip:
+                    _CACHE.update(ctl_at=now, ctl_ip=ip, ctl_open=_connect_ms(ip, 9900, timeout=0.8) is not None)
+                d["control_port"] = _CACHE["ctl_open"]
         d["route"] = _route_for(ip, ads)
     try:
         d["link"] = control.status()

@@ -1,6 +1,6 @@
 {
-  "version": "0.5.0",
-  "notes": "Plan & Control: per-night target planner with one-click goto, simple camera panel with recommended presets, W/A/S/D joystick, live view with scroll zoom. Calibrate & learn with auto-apply and Alt-Az/EQ. Projects tab. Network tab with live status, connection tests, hotspot and Bluetooth fallbacks; wider Find my DWARF. First-time setup page and software check. 30 earth-tone themes.",
-  "sha256": "f520f76e8acd80f1861b8cd8a5f44714bad560960806565e72a14c9ba1008098",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.5.0.zip"
+  "version": "0.5.1",
+  "notes": "Network tab checks the DWARF's control port less often, and Plan & Control explains that only one app can control the DWARF at a time.",
+  "sha256": "22db3988be03efe12d540e8ac31ad02cd66bcadfbcfd9589d332cc739463ea4a",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.5.1.zip"
 }
