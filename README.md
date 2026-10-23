@@ -1,0 +1,109 @@
+# DWARF Overview
+
+A small app for your laptop that looks at a DWARF 3 image, measures what needs fixing, asks Claude for a processing plan, and drives GraXpert and Siril for you. Every session is logged, and your ratings feed into the next suggestions.
+
+## Set up on Windows (once)
+
+1. **Python.** Install Python 3.11 or newer from https://www.python.org/downloads/. On the first installer screen, tick **"Add python.exe to PATH"**.
+2. **GraXpert and Siril** (free). GraXpert: https://graxpert.com. Siril 1.2 or newer: https://siril.org. Use the default install locations and the app finds them on its own.
+3. **Anthropic API key.** Create one at https://console.anthropic.com (Settings → API Keys) and add a few dollars of credit. Each assessment costs roughly 10 to 15 cents.
+4. Unzip this folder somewhere permanent, such as `Documents\DWARF Overview`.
+5. Double-click **`start-windows.bat`**. The first run takes a minute to set up, then your browser opens the app. Keep the black window open while you use it, and close it to stop.
+6. Click **Settings**, paste your API key, and save. The key is stored only on your laptop.
+
+Windows may warn about the `.bat` file the first time. Choose **More info → Run anyway**.
+
+## Using it
+
+1. Plug the DWARF 3 in over USB-C (or copy its files to the laptop). In the left panel, open `Astronomy → DWARF_RAW_<target>_…` and click the **stacked FITS** file. The FITS works much better than the JPG because it hasn't been stretched yet.
+2. The app measures the image right away, on your laptop and for free:
+   - **Gradient**: light pollution or moon glow across the frame
+   - **Signal/noise**
+   - **Star count, size (FWHM) and roundness**: shows trailing, wind, focus or dew problems
+   - **Colour cast**: a green cast is normal for raw DWARF data
+   - **Stretch state and clipping**
+3. Optionally add a note ("windy after 1 am", "moon rising"), then click **Assess and plan processing**. Claude returns:
+   - A score and the issues it found.
+   - A step-by-step plan, with the menu path and exact values for each step, plus buttons that open GraXpert or Siril on the file.
+   - **Run GraXpert**: runs background extraction and AI denoise with the suggested settings. You can tweak the numbers first. It writes new files (`…_gx_bg`, `…_gx_bg_dn`) next to the original and never changes your original.
+   - **Siril script**: colour fixes and stretch, which you can edit before running. It saves `…_siril.fit` and `…_siril.tif`.
+   - Tips for your next night out.
+4. Click **Measure the result** after a run to check that the gradient and colour numbers improved.
+5. **Rate the result** and note what you actually changed. This is the step that makes it learn: your ratings and notes go along with every future request, with sessions on the same target and filter weighted first.
+
+The **History** tab lists every session, so you can see your star sizes, gradients and scores change over time.
+
+**Night mode** turns the screen red so it doesn't ruin your night vision in the car.
+
+## Moon mode
+
+The app recognizes Moon images by itself. You can also switch with the **Deep sky / Moon** buttons above the preview.
+
+- **Moon video (SER, MP4, AVI):** it rates the frames one by one and reports:
+  - how many frames are close to the sharpest
+  - how much the seeing varied
+  - whether the Moon drifted or touched the edge
+  - whether haze dimmed some frames
+
+  Claude then suggests the AutoStakkert settings: the percentage of frames to stack, the alignment point size, and whether drizzle is worth it. It also says when to run PIPP first.
+- **Moon stack (TIF, PNG, FITS):** it measures detail, clipped highlights on the bright limb, and dark halos left by too much sharpening. Claude then suggests RegiStax wavelet values or ImPPG deconvolution settings.
+- **Open in PIPP / AutoStakkert / RegiStax / ImPPG:** the app looks for these in the usual install folders, your Desktop and Downloads. If it can't find one, give it the path in Settings → Moon programs. There's also a slot for one more program of your own.
+- Moon sessions are logged separately from deep-sky ones, so each kind of advice learns from its own history.
+
+These Moon programs have no command line, so the app opens them with your file loaded and lists the exact values to set.
+
+## What's in the photo, light and colour, and comparisons
+
+Every assessment also includes:
+- **What's in the photo:** the main target, the constellation it's in, a short description, and other objects visible in the frame. For the Moon, it lists the named craters and maria you can see.
+- **Light and colour (spectral overview):** how much of the object's light is red H-alpha, teal OIII, or plain starlight, and the mix of star colours from hot blue to cool red. The DWARF 3 records three broad colour channels, not a true spectrum, so this is worked out from colour ratios plus what's known about the object.
+- **How it compares:** your best three earlier shots of the same target (by your rating, then by score) show up automatically. You can also add up to three reference images with **+ compare** in the file list. Claude then ranks them all and names the biggest gap.
+
+  DWARFLAB's terms of service don't allow apps to pull photos from their site automatically. Instead, the comparison card links to the DWARFLAB photo wall, to r/dwarflabofficial and to AstroBin. Save any photo you want to measure up against, then add it with **+ compare**.
+
+## Getting files straight from the telescope
+
+1. In the DWARFLAB app, put the DWARF 3 on your Wi-Fi (STA mode), or join the telescope's own hotspot with your laptop.
+2. Find the telescope's IP address in the DWARFLAB app or in Dwarfium.
+3. Enter the address in Settings.
+4. On the **From DWARF** tab, click **Load sessions** and pick a session. The stacked files are pre-selected. Click **Copy to laptop and measure**.
+
+Files go to `Pictures\DWARF Library` (you can change this in Settings). Nothing on the telescope is changed or deleted.
+
+## Dwarfium
+
+[Dwarfium](https://github.com/stevejcl/dwarfium) is a free, open-source app (MIT license) for controlling the DWARF from a computer and pointing it from Stellarium.
+
+- Download the Windows installer from the **Releases** section of that page. It's the file ending in `_x64-setup.exe`.
+- The installer isn't code-signed, so Windows SmartScreen will warn you. Click **More info → Run anyway**.
+- Once it's installed, an **Open Dwarfium** button appears at the top of this app.
+
+## Updates
+
+When a new version is out, a banner appears at the top of the app. You can also click the version number to check. **Install and restart** does the following:
+1. Downloads the update from GitHub.
+2. Checks its SHA-256 fingerprint.
+3. Makes sure it only contains the app's own kinds of files.
+4. Backs up your current version to `%APPDATA%\DwarfOverview\backups`.
+5. Restarts the app.
+
+Your settings, API key and history are never touched by an update.
+
+## What it can and can't do yet
+
+- GraXpert and Siril can't be opened straight to a particular dialog from outside the app. "Open" loads your image in the program, and the plan tells you the exact menu path and values. GraXpert's background extraction and denoise, and Siril's commands, run automatically with the suggested settings.
+- StarNet star removal runs through Siril's `starnet` command, and only if you've set StarNet up inside Siril first.
+- Colour calibration with SPCC/PCC needs plate solving in Siril. The FITS from the DWARF includes the coordinates, but Siril may still ask you for the target name the first time.
+
+## Where things are stored
+
+`%APPDATA%\DwarfOverview` holds `config.json` (settings and your API key) and `history.db` (your session log). Back up `history.db` if you reinstall Windows, because it holds everything the app has learned.
+
+If you'd rather not save the key in a file, set a Windows environment variable named `ANTHROPIC_API_KEY` instead. The app uses that first.
+
+## Troubleshooting
+
+- **"GraXpert wasn't found"**: open Settings and paste the full path to `GraXpert.exe`.
+- **"siril-cli wasn't found"**: point Settings at `siril.exe`. `siril-cli.exe` must be in the same folder, which it is in a standard install.
+- **"Reading MP4/AVI needs opencv"**: close the app and run `start-windows.bat` again. It installs anything that's missing.
+- **Port already in use**: something else is using port 8765. Close any other copy of the app first.

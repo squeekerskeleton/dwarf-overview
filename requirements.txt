@@ -1,0 +1,6 @@
+anthropic>=2.1
+numpy>=1.26
+pillow>=10
+astropy>=6
+tifffile>=2024.1
+opencv-python-headless>=4.8

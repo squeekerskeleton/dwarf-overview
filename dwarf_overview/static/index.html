@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DWARF Overview</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1f2630; --line: #2d3540; --text: #e6edf3; --muted: #8b949e;
+    --accent: #6ea8fe; --good: #3fb950; --warn: #d29922; --bad: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body.night { filter: sepia(1) saturate(6) hue-rotate(-50deg) brightness(.6); }
+  header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 17px; margin: 0 12px 0 0; }
+  header .spacer { flex: 1; }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.tab.active { border-color: var(--accent); color: var(--accent); }
+  input, textarea, select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; width: 100%; }
+  textarea { min-height: 60px; resize: vertical; }
+  main { display: grid; grid-template-columns: 300px 1fr; min-height: calc(100vh - 52px); }
+  #browser { border-right: 1px solid var(--line); padding: 12px; overflow: auto; max-height: calc(100vh - 52px); position: sticky; top: 52px; }
+  #browser .path { font-size: 12px; color: var(--muted); word-break: break-all; margin: 6px 0; }
+  #browser ul { list-style: none; padding: 0; margin: 0; }
+  #browser li { padding: 4px 6px; border-radius: 4px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #browser li:hover { background: var(--panel2); }
+  #browser li.file { color: var(--accent); display: flex; gap: 6px; align-items: center; }
+  #browser li.file span.fn { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  #browser li.file button.addref { padding: 0 6px; font-size: 11px; display: none; }
+  body.picking #browser li.file button.addref { display: inline-block; }
+  .bar { display: flex; height: 14px; border-radius: 4px; overflow: hidden; margin: 4px 0; }
+  .bar span { display: block; height: 100%; }
+  .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+  .thumbs label { display: block; background: var(--panel2); border-radius: 6px; padding: 6px; color: var(--text); cursor: pointer; }
+  .thumbs img { width: 100%; border-radius: 4px; display: block; margin-bottom: 4px; }
+  #browser li.file.fits::after { content: " (linear)"; color: var(--muted); font-size: 11px; }
+  #browser li.file.video::after { content: " (video)"; color: var(--muted); font-size: 11px; }
+  .modebar { display: flex; gap: 0; } .modebar button { border-radius: 0; } .modebar button:first-child { border-radius: 6px 0 0 6px; } .modebar button:last-child { border-radius: 0 6px 6px 0; }
+  .modebar button.on { background: #1f3a5f; color: var(--accent); border-color: var(--accent); }
+  .roots { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
+  .roots button { padding: 2px 8px; font-size: 12px; }
+  #content { padding: 16px; overflow: auto; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 15px; margin: 0 0 10px; }
+  .previews { display: grid; grid-template-columns: 2fr 1fr; gap: 10px; }
+  .previews img { width: 100%; border-radius: 6px; display: block; background: #000; }
+  .caption { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+  .metric { background: var(--panel2); border-radius: 6px; padding: 10px; border-left: 4px solid var(--muted); }
+  .metric.good { border-left-color: var(--good); } .metric.warn { border-left-color: var(--warn); } .metric.bad { border-left-color: var(--bad); }
+  .metric .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .metric .v { font-size: 18px; font-weight: 600; }
+  .metric .d { color: var(--muted); font-size: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .score { font-size: 28px; font-weight: 700; margin-right: 10px; }
+  .issue { padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .sev { font-size: 11px; padding: 1px 6px; border-radius: 10px; margin-right: 6px; text-transform: uppercase; }
+  .sev.none { background: #23332a; color: var(--good); } .sev.minor { background: #33301f; color: var(--warn); }
+  .sev.moderate { background: #3a2a1a; color: #f0883e; } .sev.major { background: #3a1d1d; color: var(--bad); }
+  .step { background: var(--panel2); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
+  .step .tool { font-size: 11px; background: #1f3a5f; color: var(--accent); padding: 1px 8px; border-radius: 10px; margin-right: 6px; }
+  .step .menu { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); margin: 4px 0; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .settings-table td:first-child { color: var(--muted); width: 40%; }
+  pre, .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  pre { background: var(--bg); padding: 8px; border-radius: 6px; white-space: pre-wrap; max-height: 260px; overflow: auto; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  label { display: block; color: var(--muted); font-size: 12px; margin: 8px 0 3px; }
+  .muted { color: var(--muted); }
+  .error { color: var(--bad); }
+  .ok { color: var(--good); }
+  .hidden { display: none !important; }
+  .stars { display: flex; gap: 4px; } .stars button { padding: 4px 10px; } .stars button.on { background: #1f6feb; border-color: #1f6feb; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px; width: min(560px, 92vw); }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } #browser { position: static; max-height: 300px; border-right: 0; border-bottom: 1px solid var(--line); } .previews, .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>DWARF Overview</h1>
+  <button class="tab active" data-tab="work">Assess</button>
+  <button class="tab" data-tab="dwarf">From DWARF</button>
+  <button class="tab" data-tab="history">History</button>
+  <span class="spacer"></span>
+  <button id="dwarfiumBtn" class="hidden" title="Open Dwarfium to control the telescope">Open Dwarfium</button>
+  <button id="updateBtn" title="Check for a new version">v<span id="version"></span></button>
+  <span id="keyStatus" class="muted"></span>
+  <button id="nightBtn" title="Red night-vision mode for use in the field">Night mode</button>
+  <button id="settingsBtn">Settings</button>
+</header>
+
+<div id="updateBanner" class="hidden" style="background:#1f3a5f;padding:10px 16px;border-bottom:1px solid var(--line)">
+  <div class="row"><b id="updTitle"></b><span class="spacer" style="flex:1"></span><button class="primary" id="updInstall">Install and restart</button><button id="updLater">Later</button></div>
+  <div id="updNotes" class="caption" style="white-space:pre-wrap"></div><div id="updStatus" class="caption"></div>
+</div>
+<main id="workTab">
+  <aside id="browser">
+    <div class="roots" id="roots"></div>
+    <div class="row"><button id="upBtn">Up</button><button id="homeBtn">Home</button></div>
+    <div class="path" id="curPath"></div>
+    <ul id="list"></ul>
+    <p class="muted" style="font-size:12px">Tip: plug the DWARF 3 in over USB-C and open Astronomy &rarr; DWARF_RAW_&hellip; Pick the stacked FITS for the best assessment. For the Moon, pick the video (SER, MP4, AVI) to get stacking advice, or your stacked image to get sharpening advice.</p>
+  </aside>
+  <section id="content">
+    <div id="empty" class="card"><h2>Pick an image</h2><p class="muted">Choose a stacked FITS, TIFF, PNG or JPG on the left, or a Moon video (SER, MP4, AVI). The app measures it locally (free), then you can ask Claude for a full assessment and processing plan.</p></div>
+
+    <div id="analysis" class="hidden">
+      <div class="card">
+        <div class="row" style="justify-content: space-between"><h2 id="fileTitle"></h2>
+          <div class="row"><div class="modebar" title="Deep-sky or Moon. Auto-detected; click to switch."><button data-mode="deepsky">Deep sky</button><button data-mode="moon">Moon</button></div>
+            <button data-open="folder">Show folder</button><span id="openBtns" class="row"></span></div></div>
+        <div class="previews"><div><img id="ovImg" alt="Whole frame preview"><div class="caption" id="ovCap"></div></div>
+          <div><img id="crImg" alt="Crop at 100%"><div class="caption" id="crCap">Centre crop at 100%</div></div></div>
+        <div id="shotInfo" class="caption"></div>
+      </div>
+      <div class="card"><h2>Measurements</h2><div class="metrics" id="metrics"></div></div>
+      <div class="card">
+        <h2>Ask Claude</h2>
+        <label for="note">Anything worth knowing about this session? (optional)</label>
+        <textarea id="note" placeholder="e.g. windy after midnight, some dew, moon 40% low in the east"></textarea>
+        <div class="row" style="margin-top:8px"><button class="primary" id="assessBtn">Assess and plan processing</button><span id="assessStatus" class="muted"></span></div>
+      </div>
+    </div>
+
+    <div id="assessment" class="hidden">
+      <div class="card"><div class="row"><span class="score" id="score"></span><div id="summary" style="flex:1"></div></div><div id="issues" style="margin-top:8px"></div></div>
+      <div class="card"><h2>What's in the photo</h2><div id="ident"></div></div>
+      <div class="card"><h2>Light and colour (spectral overview)</h2><div id="spectral"></div></div>
+      <div class="card"><h2>Processing plan</h2><div id="steps"></div></div>
+      <div class="card" id="compareCard">
+        <h2>How it compares</h2>
+        <p class="muted" id="cmpIntro"></p>
+        <div class="thumbs" id="cmpOwn"></div>
+        <div style="margin-top:10px"><b>Other reference images</b> <span class="muted">Click "+ compare" next to any file on the left to add it (for example photos you saved from the DWARF photo wall).</span>
+          <ul id="cmpRefs"></ul></div>
+        <details style="margin:8px 0"><summary>See this target on DWARFLAB's photo wall and elsewhere</summary>
+          <div id="cmpLinks" style="margin-top:6px"></div>
+          <p class="caption">DWARFLAB's terms of service don't allow apps to pull photos from their site automatically, so these links open the pages in your browser. Save the ones you like and add them as references above.</p></details>
+        <div class="row"><button class="primary" id="cmpRun">Compare with Claude</button><span id="cmpStatus" class="muted"></span></div>
+        <div id="cmpResult" style="margin-top:10px"></div>
+      </div>
+      <div class="card" id="gxCard">
+        <h2>Run GraXpert with these settings</h2>
+        <p class="muted">Runs GraXpert's command line on a copy. Your original file is never changed.</p>
+        <div class="grid2">
+          <div><label><input type="checkbox" id="gxBg" style="width:auto"> Background extraction</label>
+            <label for="gxCorr">Correction</label><select id="gxCorr"><option>Subtraction</option><option>Division</option></select>
+            <label for="gxSmooth">Smoothing (0 to 1)</label><input id="gxSmooth" type="number" step="0.05" min="0" max="1"></div>
+          <div><label><input type="checkbox" id="gxDn" style="width:auto"> AI denoise</label>
+            <label for="gxStr">Strength (0 to 1)</label><input id="gxStr" type="number" step="0.05" min="0" max="1"></div>
+        </div>
+        <div class="row" style="margin-top:10px"><button class="primary" id="gxRun">Run GraXpert</button><span id="gxStatus" class="muted"></span></div>
+        <pre id="gxLog" class="hidden"></pre>
+      </div>
+      <div class="card" id="sirilCard">
+        <h2>Siril script</h2>
+        <p class="muted">Runs on the GraXpert result if there is one, otherwise on the original. Read it and edit freely before running.</p>
+        <textarea id="sirilScript" class="mono" style="min-height:160px"></textarea>
+        <div class="row" style="margin-top:8px"><button id="sirilRun">Run in Siril</button><span id="sirilStatus" class="muted"></span></div>
+        <pre id="sirilLog" class="hidden"></pre>
+      </div>
+      <div class="card"><h2>Next time you shoot</h2><ul id="tips"></ul><p class="muted" id="learned"></p></div>
+      <div class="card">
+        <h2>How did it turn out?</h2>
+        <p class="muted">This is what makes later suggestions better. Rate the final result and note what you actually changed.</p>
+        <div class="stars" id="rating"></div>
+        <label for="used">Settings you actually used</label><input id="used" placeholder="e.g. smoothing 0.2 instead of 0.1, skipped denoise">
+        <label for="fbNotes">Notes</label><textarea id="fbNotes" placeholder="e.g. background still blotchy in the corner, colour looked great"></textarea>
+        <div class="row" style="margin-top:8px"><button class="primary" id="fbSave">Save feedback</button><span id="fbStatus" class="muted"></span></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<section id="dwarfTab" class="hidden" style="padding:16px">
+  <div class="card"><h2>Sessions on the telescope</h2>
+    <p class="muted">Reads the DWARF over Wi-Fi, the same way Dwarfium's session browser does. Put the DWARF on your home Wi-Fi (STA mode in the DWARFLAB app) or join its hotspot, and set its IP address in Settings. Files are copied to your library; nothing on the telescope is changed.</p>
+    <div class="row"><button class="primary" id="dwRefresh">Load sessions</button><span id="dwStatus" class="muted"></span></div>
+    <div class="grid2" style="margin-top:10px"><div><ul id="dwSessions" style="list-style:none;padding:0;margin:0;max-height:60vh;overflow:auto"></ul></div>
+      <div id="dwDetail"></div></div></div>
+</section>
+
+<section id="historyTab" class="hidden" style="padding:16px">
+  <div class="card"><h2>Your sessions</h2><p class="muted">Every assessment is logged on this computer. The most relevant ones (same target, same filter) go along with each new request.</p>
+    <div style="overflow:auto"><table id="histTable"></table></div></div>
+</section>
+
+<dialog id="settings">
+  <h2 style="margin-top:0">Settings</h2>
+  <label for="apiKey">Anthropic API key</label>
+  <input id="apiKey" type="password" placeholder="sk-ant-..." autocomplete="off">
+  <div class="caption" id="apiKeyHelp"></div>
+  <div class="grid2">
+    <div><label for="model">Model</label><input id="model"></div>
+    <div><label for="effort">Effort</label><select id="effort"><option>low</option><option>medium</option><option>high</option></select></div>
+  </div>
+  <label for="sirilPath">Siril program (leave blank to auto-detect)</label><input id="sirilPath">
+  <label for="gxPath">GraXpert program (leave blank to auto-detect)</label><input id="gxPath">
+  <details style="margin-top:8px"><summary class="muted">Moon programs (leave blank to auto-detect)</summary>
+    <label for="ppPath">PIPP</label><input id="ppPath">
+    <label for="asPath">AutoStakkert</label><input id="asPath">
+    <label for="rxPath">RegiStax</label><input id="rxPath">
+    <label for="imPath">ImPPG</label><input id="imPath">
+    <div class="grid2"><div><label for="otherName">Another program you use: name</label><input id="otherName" placeholder="e.g. Planetary System Stacker"></div>
+      <div><label for="otherPath">its .exe</label><input id="otherPath"></div></div>
+  </details>
+  <label for="startFolder">Start the file browser in</label><input id="startFolder">
+  <div class="grid2"><div><label for="dwarfIp">DWARF IP address (for From DWARF)</label><input id="dwarfIp" placeholder="e.g. 192.168.1.42"></div>
+    <div><label for="libFolder">Save DWARF downloads to</label><input id="libFolder" placeholder="Pictures\DWARF Library"></div></div>
+  <label for="dwarfiumPath">Dwarfium program (leave blank to auto-detect)</label><input id="dwarfiumPath">
+  <label for="updateUrl">Update source (latest.json address)</label><input id="updateUrl">
+  <div class="caption" id="toolStatus" style="margin-top:8px"></div>
+  <div class="row" style="margin-top:14px; justify-content:flex-end"><button id="clearKey">Remove saved key</button><button id="closeSettings">Cancel</button><button class="primary" id="saveSettings">Save</button></div>
+</dialog>
+
+<script>
+const TOKEN = "__TOKEN__";
+const $ = (id) => document.getElementById(id);
+let cfg = {}, current = null, assessment = null, assessmentId = null, latestOutput = null, rating = null;
+
+async function api(path, body) {
+  const opts = { headers: { "X-Token": TOKEN } };
+  if (body !== undefined) { opts.method = "POST"; opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({ error: "Bad response" }));
+  if (!r.ok || data.error) throw new Error(data.error || r.statusText);
+  return data;
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// ---------------- settings
+async function loadConfig() {
+  cfg = await api("/api/config");
+  $("keyStatus").textContent = cfg.has_api_key ? "" : "No API key yet";
+  $("keyStatus").className = cfg.has_api_key ? "muted" : "error";
+  $("version").textContent = cfg.version;
+  $("dwarfiumBtn").classList.toggle("hidden", !cfg.tools.dwarfium);
+}
+$("dwarfiumBtn").onclick = () => api("/api/open", { tool: "dwarfium", path: "" }).catch((e) => alert(e.message));
+
+// ---------------- updates
+async function checkUpdates(manual) {
+  try {
+    const u = await api("/api/update/check");
+    if (!u.configured) { if (manual) alert("No update source is set yet. It will be filled in with the next version."); return; }
+    if (!u.available) { if (manual) alert(`You're on the latest version (${u.current}).`); return; }
+    $("updTitle").textContent = `Version ${u.latest} is ready (you have ${u.current}).`;
+    $("updNotes").textContent = u.notes || "";
+    $("updateBanner").classList.remove("hidden");
+  } catch (e) { if (manual) alert(e.message); }
+}
+$("updateBtn").onclick = () => checkUpdates(true);
+$("updLater").onclick = () => $("updateBanner").classList.add("hidden");
+$("updInstall").onclick = async () => {
+  $("updInstall").disabled = true;
+  $("updStatus").innerHTML = '<span class="spinner"></span> Downloading, checking and installing&hellip;';
+  try {
+    const r = await api("/api/update/install", {});
+    $("updStatus").textContent = `Installed ${r.installed}. Restarting; this page reloads by itself.`;
+    waitForRestart();
+  } catch (e) { $("updStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; $("updInstall").disabled = false; }
+};
+async function waitForRestart() {
+  await new Promise((r) => setTimeout(r, 3000));
+  for (let i = 0; i < 60; i++) {
+    try { const r = await fetch("/", { cache: "no-store" }); if (r.ok) { location.reload(); return; } } catch (e) {}
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  $("updStatus").textContent = "The app didn't come back by itself. Run start-windows.bat again.";
+}
+$("settingsBtn").onclick = () => {
+  $("apiKey").value = "";
+  $("apiKeyHelp").textContent = cfg.api_key_source === "environment" ? "Using ANTHROPIC_API_KEY from the environment." :
+    cfg.has_api_key ? "A key is saved on this computer. Leave blank to keep it." : "Create one at console.anthropic.com. It is saved only on this computer.";
+  $("model").value = cfg.model; $("effort").value = cfg.effort; $("sirilPath").value = cfg.siril_path;
+  $("gxPath").value = cfg.graxpert_path; $("startFolder").value = cfg.start_folder;
+  $("ppPath").value = cfg.pipp_path; $("asPath").value = cfg.autostakkert_path; $("rxPath").value = cfg.registax_path;
+  $("dwarfIp").value = cfg.dwarf_ip; $("libFolder").value = cfg.library_folder; $("dwarfiumPath").value = cfg.dwarfium_path; $("updateUrl").value = cfg.update_url;
+  $("imPath").value = cfg.imppg_path; $("otherName").value = cfg.other_app_name; $("otherPath").value = cfg.other_app_path;
+  const t = cfg.tools, f = (v) => v ? '<span class="ok">found</span>' : '<span class="error">not found</span>';
+  $("toolStatus").innerHTML = `GraXpert: ${f(t.graxpert)} &middot; Siril: ${f(t.siril)} &middot; siril-cli: ${f(t.siril_cli)}<br>Dwarfium: ${f(t.dwarfium)} &middot; PIPP: ${f(t.pipp)} &middot; AutoStakkert: ${f(t.autostakkert)} &middot; RegiStax: ${f(t.registax)} &middot; ImPPG: ${f(t.imppg)}<br>Data folder: ${esc(cfg.data_dir)}`;
+  $("settings").showModal();
+};
+$("closeSettings").onclick = () => $("settings").close();
+$("saveSettings").onclick = async () => {
+  cfg = await api("/api/config", { api_key: $("apiKey").value, model: $("model").value.trim(), effort: $("effort").value,
+    siril_path: $("sirilPath").value.trim(), graxpert_path: $("gxPath").value.trim(), start_folder: $("startFolder").value.trim(),
+    pipp_path: $("ppPath").value.trim(), autostakkert_path: $("asPath").value.trim(), registax_path: $("rxPath").value.trim(),
+    imppg_path: $("imPath").value.trim(), dwarf_ip: $("dwarfIp").value.trim(), library_folder: $("libFolder").value.trim(),
+    dwarfium_path: $("dwarfiumPath").value.trim(), update_url: $("updateUrl").value.trim(), other_app_name: $("otherName").value.trim(), other_app_path: $("otherPath").value.trim() });
+  $("settings").close(); loadConfig();
+};
+$("clearKey").onclick = async () => { cfg = await api("/api/config", { clear_api_key: true }); $("settings").close(); loadConfig(); };
+$("nightBtn").onclick = () => { document.body.classList.toggle("night"); try { localStorage.setItem("night", document.body.classList.contains("night") ? "1" : ""); } catch (e) {} };
+try { if (localStorage.getItem("night")) document.body.classList.add("night"); } catch (e) {}
+
+// ---------------- tabs
+document.querySelectorAll(".tab").forEach((b) => b.onclick = () => {
+  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === b));
+  $("workTab").classList.toggle("hidden", b.dataset.tab !== "work");
+  $("historyTab").classList.toggle("hidden", b.dataset.tab !== "history");
+  $("dwarfTab").classList.toggle("hidden", b.dataset.tab !== "dwarf");
+  if (b.dataset.tab === "history") loadHistory();
+});
+
+// ---------------- file browser
+let folder = null, parent = null;
+async function browse(f) {
+  const d = await api("/api/browse" + (f ? "?folder=" + encodeURIComponent(f) : ""));
+  folder = d.folder; parent = d.parent;
+  $("curPath").textContent = d.folder + (d.has_shots_info ? "  (DWARF session)" : "");
+  $("roots").innerHTML = d.roots.map((r) => `<button data-root="${esc(r)}">${esc(r)}</button>`).join("");
+  $("roots").querySelectorAll("button").forEach((b) => b.onclick = () => browse(b.dataset.root));
+  const sep = d.folder.includes("\\") ? "\\" : "/";
+  const join = (n) => d.folder.replace(/[\\/]$/, "") + sep + n;
+  $("list").innerHTML = (d.error ? `<li class="error">${esc(d.error)}</li>` : "") +
+    d.dirs.map((n) => `<li data-dir="${esc(join(n))}">&#128193; ${esc(n)}</li>`).join("") +
+    d.files.map((f) => `<li class="file ${/\.fi?ts$/i.test(f.name) ? "fits" : /\.(ser|mp4|avi|mov|mkv)$/i.test(f.name) ? "video" : ""}" data-file="${esc(join(f.name))}"><span class="fn">${esc(f.name)}</span><button class="addref" title="Add as a comparison image">+ compare</button></li>`).join("");
+  $("list").querySelectorAll("li[data-dir]").forEach((li) => li.onclick = () => browse(li.dataset.dir));
+  $("list").querySelectorAll("li[data-file]").forEach((li) => li.onclick = () => analyze(li.dataset.file));
+  $("list").querySelectorAll("button.addref").forEach((b) => b.onclick = (ev) => { ev.stopPropagation(); addRef(b.parentElement.dataset.file); });
+}
+$("upBtn").onclick = () => browse(parent);
+$("homeBtn").onclick = () => browse("");
+
+// ---------------- analysis
+function level(v, warn, bad, invert) {
+  if (v == null) return "";
+  return invert ? (v < bad ? "bad" : v < warn ? "warn" : "good") : (v > bad ? "bad" : v > warn ? "warn" : "good");
+}
+function metricCard(k, v, d, cls) { return `<div class="metric ${cls || ""}"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div><div class="d">${esc(d)}</div></div>`; }
+
+const TOOL_KEYS = { GraXpert: "graxpert", Siril: "siril", StarNet: "siril", PIPP: "pipp", AutoStakkert: "autostakkert", RegiStax: "registax", ImPPG: "imppg" };
+const TOOL_LABELS = { graxpert: "GraXpert", siril: "Siril", pipp: "PIPP", autostakkert: "AutoStakkert", registax: "RegiStax", imppg: "ImPPG" };
+async function openTool(tool) {
+  try { await api("/api/open", { tool, path: latestOutput || current.path }); } catch (e) { alert(e.message); }
+}
+function drawOpenButtons(mode) {
+  const keys = mode === "moon" ? ["pipp", "autostakkert", "registax", "imppg"] : ["graxpert", "siril"];
+  let html = keys.map((k) => `<button data-tool="${k}">Open in ${TOOL_LABELS[k]}</button>`).join("");
+  if (cfg.tools.other_app) html += `<button data-tool="other_app">Open in ${esc(cfg.tools.other_app_name)}</button>`;
+  $("openBtns").innerHTML = html;
+  $("openBtns").querySelectorAll("button").forEach((b) => b.onclick = () => openTool(b.dataset.tool));
+  document.querySelectorAll("[data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+}
+document.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => current && current.kind === "image" && analyze(current.path, b.dataset.mode));
+
+function moonCards(m, kind) {
+  if (kind === "video") {
+    const q = m.frame_quality, st = m.stability, v = m.video;
+    return [
+      metricCard("Frames", v.frames, `${v.width} x ${v.height}${v.fps ? ", " + v.fps + " fps" : ""}; ${v.sampled} sampled`, ""),
+      metricCard("Good frames", q.frames_within_15pct_of_best_percent + "%", "within 15% of the sharpest", level(q.frames_within_15pct_of_best_percent, 15, 5, true)),
+      metricCard("Seeing variation", q.spread_p90_over_p10 + "x", "best vs worst frames (sharpness)", level(q.spread_p90_over_p10, 1.8, 3)),
+      metricCard("Sharpness", q.sharpness_p90, `median ${q.sharpness_median}; compare with your history`, ""),
+      metricCard("Drift", st.drift_percent_of_frame + "%", `${st.frames_touching_edge_percent}% of frames touch the edge`, level(st.drift_percent_of_frame, 10, 25)),
+      metricCard("Brightness steadiness", st.brightness_variation_percent + "%", "high means haze or cloud", level(st.brightness_variation_percent, 5, 15)),
+      metricCard("Clipping", m.exposure.saturated_pixels_percent_median + "%", "saturated pixels per frame", level(m.exposure.saturated_pixels_percent_median, 0.05, 0.5)),
+    ].join("");
+  }
+  const d = m.disk || {}, e = m.exposure;
+  return [
+    metricCard("Moon", d.approx_illuminated_percent != null ? d.approx_illuminated_percent + "% lit" : "n/a", d.disk_diameter_px ? `${d.disk_diameter_px} px across${d.touches_frame_edge ? ", touches the edge" : ""}` : "", ""),
+    metricCard("Sharpness", m.detail.sharpness_index, "relative; compare with your history", ""),
+    metricCard("Limb clipping", e.saturated_disk_percent + "%", "of the disk is pure white", level(e.saturated_disk_percent, 0.05, 0.5)),
+    metricCard("Sharpening halo", m.sharpening_halo_sigma ?? "n/a", "dark ring outside the limb, in sigma", level(m.sharpening_halo_sigma, 3, 6)),
+    metricCard("Noise on disk", m.detail.noise_sigma_on_disk, "", ""),
+    m.color ? metricCard("Colour", m.color.saturation_index, "saturation index", "") : metricCard("Colour", "mono", "", ""),
+  ].join("");
+}
+
+async function analyze(path, mode) {
+  $("empty").classList.add("hidden"); $("assessment").classList.add("hidden");
+  $("analysis").classList.remove("hidden");
+  $("fileTitle").innerHTML = `<span class="spinner"></span> Measuring ${esc(path.split(/[\\/]/).pop())}&hellip;`;
+  $("metrics").innerHTML = ""; $("ovImg").removeAttribute("src"); $("crImg").removeAttribute("src");
+  try { current = await api("/api/analyze", { path, mode: mode || "auto" }); } catch (e) { $("fileTitle").innerHTML = `<span class="error">${esc(e.message)}</span>`; return; }
+  latestOutput = null;
+  const m = current.metrics;
+  drawOpenButtons(current.mode);
+  $("fileTitle").textContent = path.split(/[\\/]/).pop() + (current.mode === "moon" ? (current.kind === "video" ? " (Moon video)" : " (Moon)") : "");
+  $("ovImg").src = "data:image/jpeg;base64," + current.overview_jpeg_b64;
+  $("crImg").src = "data:image/jpeg;base64," + current.crop_jpeg_b64;
+  $("crCap").textContent = current.kind === "video" ? "Same patch at 100%: sharpest frame (left), softest (right)" : current.mode === "moon" ? "100% crop on the most detailed area" : "Centre crop at 100%";
+  const si0 = current.shot_info || {};
+  $("shotInfo").textContent = Object.keys(si0).length ? "shotsInfo.json: " + Object.entries(si0).filter(([, v]) => typeof v !== "object").slice(0, 10).map(([k, v]) => `${k}=${v}`).join(", ") : "No shotsInfo.json found next to this file.";
+  if (current.mode === "moon") {
+    $("ovCap").textContent = current.kind === "video" ? "Sharpest sampled frame" : `${m.image.width} x ${m.image.height}, ${m.image.format}, ${m.image.bit_depth}`;
+    $("metrics").innerHTML = moonCards(m, current.kind);
+    return;
+  }
+  const s = m.stars || {}, g = m.gradient, st = m.stretch, c = m.color;
+  $("ovCap").textContent = `${m.image.width} x ${m.image.height}, ${m.image.format}, ${m.image.bit_depth}` + (current.display_stretched ? " (auto-stretched for display; the file itself is linear)" : "");
+  $("metrics").innerHTML = [
+    metricCard("Gradient", g.spread_percent_of_background + "%", `brighter toward ${g.brighter_toward}, ${g.spread_in_noise_sigmas} sigma`, level(g.spread_percent_of_background, 8, 25)),
+    metricCard("Signal / noise", m.background.snr_proxy_p99_5, "relative; compare with your history", ""),
+    metricCard("Stars", s.detected ?? 0, s.note || `${s.measured} measured`, s.detected > 30 ? "good" : "warn"),
+    metricCard("Star size (FWHM)", s.fwhm_px_median != null ? s.fwhm_px_median + " px" : "n/a", s.fwhm_arcsec_median ? `about ${s.fwhm_arcsec_median}"; edge ${s.fwhm_edge_px} px` : `centre ${s.fwhm_center_px ?? "?"} / edge ${s.fwhm_edge_px ?? "?"} px`, level(s.fwhm_px_median, 4.5, 6)),
+    metricCard("Star roundness", s.elongation_median != null ? s.elongation_median : "n/a", s.elongated_percent != null ? `${s.elongated_percent}% elongated; edges ${s.elongation_edge}` : "", level(s.elongation_median, 1.2, 1.4)),
+    c ? metricCard("Colour", c.background_cast, `R/G ${c.background_ratios["R/G"]}, B/G ${c.background_ratios["B/G"]}`, c.background_cast === "neutral" ? "good" : "warn") : metricCard("Colour", "mono", "single channel", ""),
+    metricCard("Stretch", st.state, `median ${st.median_luminance}`, ""),
+    metricCard("Clipping", st.saturated_pixels_percent + "%", `saturated; ${st.black_clipped_percent}% black`, level(st.saturated_pixels_percent, 0.05, 0.5)),
+  ].join("");
+}
+document.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => openTool(b.dataset.open));
+
+// ---------------- assessment
+$("assessBtn").onclick = async () => {
+  if (!cfg.has_api_key) { $("settingsBtn").click(); return; }
+  $("assessBtn").disabled = true;
+  $("assessStatus").innerHTML = '<span class="spinner"></span> Claude is looking at the image. This usually takes 20 to 60 seconds.';
+  try {
+    assessment = await api("/api/assess", { analysis_id: current.analysis_id, note: $("note").value });
+    assessmentId = assessment.assessment_id;
+    $("assessStatus").textContent = ""; renderAssessment();
+  } catch (e) { $("assessStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+  $("assessBtn").disabled = false;
+};
+
+function renderAssessment() {
+  const a = assessment;
+  $("assessment").classList.remove("hidden");
+  $("score").textContent = a.quality_score + "/10";
+  $("summary").textContent = a.overall_summary;
+  $("issues").innerHTML = a.issues.map((i) => `<div class="issue"><span class="sev ${i.severity}">${i.severity}</span><b>${esc(i.area)}</b>: ${esc(i.finding)}</div>`).join("");
+  renderIdent(a); renderSpectral(a); loadCompare(a);
+  $("steps").innerHTML = a.steps.map((s, n) => `<div class="step"><div class="row"><b>${n + 1}.</b><span class="tool">${esc(s.tool)}</span><b>${esc(s.action)}</b>
+      ${TOOL_KEYS[s.tool] ? `<button data-step-open="${TOOL_KEYS[s.tool]}" style="margin-left:auto">Open ${TOOL_LABELS[TOOL_KEYS[s.tool]]}</button>` : ""}</div>
+      <div class="menu">${esc(s.menu_path)}</div>
+      ${s.settings.length ? `<table class="settings-table">${s.settings.map((x) => `<tr><td>${esc(x.name)}</td><td><b>${esc(x.value)}</b></td></tr>`).join("")}</table>` : ""}
+      <div class="caption">${esc(s.why)}</div></div>`).join("");
+  $("steps").querySelectorAll("[data-step-open]").forEach((b) => b.onclick = () => openTool(b.dataset.stepOpen));
+  const gx = a.graxpert;
+  $("gxBg").checked = gx.run_background; $("gxDn").checked = gx.run_denoise; $("gxCorr").value = gx.correction;
+  $("gxSmooth").value = gx.smoothing; $("gxStr").value = gx.denoise_strength;
+  $("gxStatus").textContent = cfg.tools.graxpert ? "" : "GraXpert not found; set it in Settings.";
+  $("gxCard").classList.toggle("hidden", !(gx.run_background || gx.run_denoise));
+  $("sirilScript").value = a.siril_script_text;
+  $("sirilCard").classList.toggle("hidden", !a.siril_script.length);
+  $("sirilStatus").textContent = cfg.tools.siril_cli ? "" : "siril-cli not found; set Siril in Settings.";
+  $("tips").innerHTML = a.capture_tips.map((t) => `<li>${esc(t)}</li>`).join("");
+  $("learned").textContent = a.learned_note ? "Remembered: " + a.learned_note : "";
+  rating = null; drawRating(); $("used").value = ""; $("fbNotes").value = ""; $("fbStatus").textContent = "";
+  $("assessment").scrollIntoView({ behavior: "smooth" });
+}
+
+async function watchJob(id, statusEl, logEl, onDone) {
+  statusEl.innerHTML = '<span class="spinner"></span> Running&hellip;';
+  logEl.classList.remove("hidden");
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const j = await api("/api/job/" + id);
+    logEl.textContent = j.log.join("\n");
+    if (j.state === "running") continue;
+    if (j.state === "done") { statusEl.innerHTML = `<span class="ok">Done.</span> ${typeof j.output === "string" ? esc(j.output) : j.output && j.output.folder ? "Saved to " + esc(j.output.folder) : ""}`; onDone && onDone(j.output); }
+    else statusEl.innerHTML = `<span class="error">${esc(j.error)}</span>`;
+    return;
+  }
+}
+function offerReanalyze(statusEl, out) {
+  if (!out) return;
+  latestOutput = out;
+  const b = document.createElement("button"); b.textContent = "Measure the result"; b.style.marginLeft = "8px";
+  b.onclick = () => analyze(out); statusEl.appendChild(b);
+}
+$("gxRun").onclick = async () => {
+  try {
+    const { job_id } = await api("/api/run/graxpert", { assessment_id: assessmentId, run_background: $("gxBg").checked, run_denoise: $("gxDn").checked,
+      correction: $("gxCorr").value, smoothing: parseFloat($("gxSmooth").value), denoise_strength: parseFloat($("gxStr").value) });
+    watchJob(job_id, $("gxStatus"), $("gxLog"), (out) => offerReanalyze($("gxStatus"), out));
+  } catch (e) { $("gxStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+};
+$("sirilRun").onclick = async () => {
+  try {
+    const path = latestOutput || current.path;
+    const script = $("sirilScript").value.replace(/^load .*$/m, `load "${path.split(/[\\/]/).pop()}"`);
+    const { job_id } = await api("/api/run/siril", { assessment_id: assessmentId, path, script });
+    watchJob(job_id, $("sirilStatus"), $("sirilLog"), (out) => offerReanalyze($("sirilStatus"), out));
+  } catch (e) { $("sirilStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+};
+
+// ---------------- identification, colour, comparison
+function renderIdent(a) {
+  const i = a.identification || {};
+  $("ident").innerHTML = `<div class="row"><b style="font-size:16px">${esc(i.primary_target)}</b><span class="muted">${esc(i.object_type)} in ${esc(i.constellation)} &middot; ${esc(i.confidence)} confidence</span></div>
+    <p>${esc(i.description)}</p>` + ((i.also_in_frame || []).length ? `<table>${i.also_in_frame.map((o) => `<tr><td><b>${esc(o.name)}</b></td><td class="muted">${esc(o.where)}</td><td>${esc(o.note)}</td></tr>`).join("")}</table>` : "");
+}
+function renderSpectral(a) {
+  const sp = a.spectral_overview || {}, ce = (current && current.metrics.color_emission) || null;
+  let html = `<p>${esc(sp.summary)}</p>`;
+  if (ce && ce.signal_rgb_fraction) {
+    const [r, g, b] = ce.signal_rgb_fraction.map((v) => (v * 100).toFixed(0));
+    html += `<div class="caption">Measured light from the object (stars removed): ${esc(ce.dominant_light)}; H-alpha to OIII ratio ${esc(ce.halpha_vs_oiii_ratio)}</div>
+      <div class="bar"><span style="width:${r}%;background:#e5534b" title="red ${r}%"></span><span style="width:${g}%;background:#57ab5a" title="green ${g}%"></span><span style="width:${b}%;background:#539bf5" title="blue ${b}%"></span></div>`;
+  }
+  if (ce && ce.star_colours_percent) {
+    const cols = ["#9ecbff", "#f0f6fc", "#f9e2af", "#f0a35e", "#e5534b"];
+    html += `<div class="caption">Star colour mix (hot blue to cool red):</div><div class="bar">${Object.entries(ce.star_colours_percent).map(([k, v], n) => `<span style="width:${v}%;background:${cols[n]}" title="${esc(k)} ${v}%"></span>`).join("")}</div>
+      <div class="caption">${Object.entries(ce.star_colours_percent).filter(([, v]) => v > 0).map(([k, v]) => `${esc(k)} ${v}%`).join(" &middot; ")}</div>`;
+  }
+  if ((sp.lines || []).length) html += `<table style="margin-top:8px"><tr><th>Line</th><th>Wavelength</th><th>In this image</th><th></th></tr>${sp.lines.map((l) => `<tr><td>${esc(l.name)}</td><td>${esc(l.wavelength_nm)} nm</td><td>${esc(l.seen_in_image)}</td><td class="muted">${esc(l.note)}</td></tr>`).join("")}</table>`;
+  if (sp.star_colours) html += `<p class="caption">${esc(sp.star_colours)}</p>`;
+  html += `<p class="caption">The DWARF 3 records three broad colour channels, not a true spectrum, so this is read from colour ratios plus what's known about the object.</p>`;
+  $("spectral").innerHTML = html;
+}
+let refs = [];
+function addRef(path) {
+  if (!refs.includes(path) && refs.length < 3) refs.push(path);
+  drawRefs();
+}
+function drawRefs() {
+  $("cmpRefs").innerHTML = refs.map((p, n) => `<li>${esc(p.split(/[\\/]/).pop())} <button data-n="${n}" style="padding:0 6px">remove</button></li>`).join("");
+  $("cmpRefs").querySelectorAll("button").forEach((b) => b.onclick = () => { refs.splice(+b.dataset.n, 1); drawRefs(); });
+}
+async function loadCompare(a) {
+  refs = []; drawRefs(); $("cmpResult").innerHTML = ""; $("cmpStatus").textContent = "";
+  document.body.classList.add("picking");
+  const d = await api("/api/best?assessment_id=" + assessmentId);
+  const target = d.target || (a.identification || {}).primary_target || "";
+  $("cmpIntro").textContent = d.best.length ? `Your best earlier shots of ${target}. Tick the ones to compare with:` : `No earlier shots of ${target} yet. Once you have some, your best three show up here.`;
+  $("cmpOwn").innerHTML = d.best.map((r) => `<label>${r.preview_b64 ? `<img src="data:image/jpeg;base64,${r.preview_b64}" alt="">` : '<div class="caption">(no preview saved)</div>'}<input type="checkbox" style="width:auto" value="${r.id}" checked> ${esc(r.created.slice(0, 10))} &middot; score ${esc(r.quality_score)}${r.rating ? " &middot; you rated " + esc(r.rating) + "/5" : ""}</label>`).join("");
+  const q = encodeURIComponent(target);
+  $("cmpLinks").innerHTML = [
+    ["DWARFLAB user photo wall (Deep Sky and Sun/Moon categories)", "https://www.dwarflab.com/us/pages/gallery"],
+    [`r/dwarflabofficial: posts about ${target}`, `https://www.reddit.com/r/dwarflabofficial/search/?q=${q}`],
+    [`AstroBin: DWARF 3 images of ${target}`, `https://www.astrobin.com/search/?q=${encodeURIComponent("DWARF 3 " + target)}`],
+  ].map(([t, u]) => `<div><a href="${u}" target="_blank" rel="noopener" style="color:var(--accent)">${esc(t)}</a></div>`).join("");
+}
+$("cmpRun").onclick = async () => {
+  const history_ids = [...$("cmpOwn").querySelectorAll("input:checked")].map((c) => +c.value);
+  $("cmpRun").disabled = true; $("cmpStatus").innerHTML = '<span class="spinner"></span> Comparing&hellip;';
+  try {
+    const c = await api("/api/compare", { assessment_id: assessmentId, analysis_id: current.analysis_id, history_ids: history_ids.slice(0, 3 - Math.min(refs.length, 3)), paths: refs });
+    $("cmpStatus").textContent = "";
+    $("cmpResult").innerHTML = `<p><b>${esc(c.verdict)}</b></p><table><tr><th>Rank</th><th>Image</th><th>Score</th><th>Strengths</th><th>Weaknesses</th></tr>
+      ${c.ranking.sort((x, y) => x.rank - y.rank).map((r) => `<tr><td>${esc(r.rank)}</td><td>${esc(r.label)}</td><td>${esc(r.score)}/10</td><td>${esc(r.strengths)}</td><td>${esc(r.weaknesses)}</td></tr>`).join("")}</table>
+      <p><b>Biggest gap:</b> ${esc(c.biggest_gap)}</p><ul>${c.next_steps.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`;
+  } catch (e) { $("cmpStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+  $("cmpRun").disabled = false;
+};
+
+// ---------------- feedback
+function drawRating() {
+  $("rating").innerHTML = [1, 2, 3, 4, 5].map((n) => `<button class="${rating >= n ? "on" : ""}" data-r="${n}">${n}</button>`).join("");
+  $("rating").querySelectorAll("button").forEach((b) => b.onclick = () => { rating = +b.dataset.r; drawRating(); });
+}
+$("fbSave").onclick = async () => {
+  try { await api("/api/feedback", { assessment_id: assessmentId, rating, settings_used: $("used").value, notes: $("fbNotes").value });
+    $("fbStatus").innerHTML = '<span class="ok">Saved. Future suggestions will take this into account.</span>'; }
+  catch (e) { $("fbStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+};
+
+// ---------------- history
+async function loadHistory() {
+  const rows = await api("/api/history");
+  $("histTable").innerHTML = rows.length ? `<tr><th>Date</th><th>Type</th><th>Target</th><th>Filter</th><th>Exp x frames</th><th>Score</th><th>FWHM / sharpness</th><th>Round</th><th>Gradient / good frames</th><th>SNR</th><th>Your rating</th><th>Notes</th></tr>` +
+    rows.map((r) => r.mode === "moon" ? `<tr><td>${esc(r.created.slice(0, 10))}</td><td>Moon ${esc(r.lunar_kind || "")}</td><td>${esc(r.target || r.file.split(/[\\/]/).pop())}</td><td>${esc(r.filter || "")}</td>
+      <td>${esc(r.exposure || "?")} x ${esc(r.frames || "?")}</td><td>${esc(r.quality_score)}</td><td>${esc(r.sharpness)}</td><td></td>
+      <td>${r.good_frames_pct != null ? esc(r.good_frames_pct) + "%" : ""}</td><td></td><td>${r.rating ? esc(r.rating) + "/5" : '<span class="muted">none</span>'}</td><td>${esc(r.notes || r.learned_note || "")}</td></tr>`
+    : `<tr><td>${esc(r.created.slice(0, 10))}</td><td>Deep sky</td><td>${esc(r.target || r.file.split(/[\\/]/).pop())}</td><td>${esc(r.filter || "")}</td>
+      <td>${esc(r.exposure || "?")}s x ${esc(r.frames || "?")}</td><td>${esc(r.quality_score)}</td><td>${esc(r.fwhm_px)}</td><td>${esc(r.elongation)}</td>
+      <td>${esc(r.gradient_pct)}%</td><td>${esc(r.snr)}</td><td>${r.rating ? esc(r.rating) + "/5" : '<span class="muted">none</span>'}</td><td>${esc(r.notes || r.learned_note || "")}</td></tr>`).join("")
+    : '<tr><td class="muted">Nothing logged yet.</td></tr>';
+}
+
+// ---------------- from DWARF
+$("dwRefresh").onclick = async () => {
+  $("dwStatus").innerHTML = '<span class="spinner"></span> Contacting the DWARF&hellip;'; $("dwSessions").innerHTML = ""; $("dwDetail").innerHTML = "";
+  try {
+    const d = await api("/api/dwarf/sessions");
+    $("dwStatus").textContent = `${d.sessions.length} sessions. Downloads go to ${d.library}`;
+    $("dwSessions").innerHTML = d.sessions.map((x, i) => `<li data-i="${i}" style="padding:6px;border-bottom:1px solid var(--line);cursor:pointer">${esc(x.name)} <span class="muted">${esc(x.date)}</span></li>`).join("");
+    $("dwSessions").querySelectorAll("li").forEach((li) => li.onclick = () => showDwarfSession(d.sessions[+li.dataset.i]));
+  } catch (e) { $("dwStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+};
+async function showDwarfSession(sess) {
+  $("dwDetail").innerHTML = '<span class="spinner"></span>';
+  try {
+    const d = await api(`/api/dwarf/session?root=${encodeURIComponent(sess.root)}&name=${encodeURIComponent(sess.name)}`);
+    const info = Object.entries(d.shot_info || {}).filter(([, v]) => typeof v !== "object").slice(0, 8).map(([k, v]) => `${esc(k)}=${esc(v)}`).join(", ");
+    $("dwDetail").innerHTML = `<b>${esc(sess.name)}</b><div class="caption">${info}</div>
+      <div style="max-height:40vh;overflow:auto;margin:8px 0">${d.files.map((f) => `<label style="display:flex;gap:6px;align-items:center;color:var(--text)"><input type="checkbox" style="width:auto" value="${esc(f.name)}" ${d.suggested.includes(f.name) ? "checked" : ""}> ${esc(f.name)} <span class="muted">${esc(f.size)}</span></label>`).join("")}</div>
+      <div class="row"><button class="primary" id="dwGet">Copy to laptop and measure</button><span id="dwGetStatus" class="muted"></span></div><pre id="dwLog" class="hidden"></pre>`;
+    $("dwGet").onclick = async () => {
+      const files = [...$("dwDetail").querySelectorAll("input:checked")].map((c) => c.value);
+      if (!files.length) return;
+      const { job_id } = await api("/api/dwarf/download", { root: sess.root, name: sess.name, files });
+      watchJob(job_id, $("dwGetStatus"), $("dwLog"), (out) => {
+        const pick = out.saved.find((p) => /stacked.*\.fits?$/i.test(p)) || out.saved.find((p) => /\.(ser|mp4|avi)$/i.test(p)) || out.saved.find((p) => !/\.json$/i.test(p));
+        browse(out.folder);
+        if (pick) { document.querySelector('[data-tab="work"]').click(); analyze(pick); }
+      });
+    };
+  } catch (e) { $("dwDetail").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+}
+
+loadConfig().then(() => { browse(""); checkUpdates(false); });
+</script>
+</body>
+</html>

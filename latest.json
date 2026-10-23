@@ -1,0 +1,6 @@
+{
+  "version": "0.2.0",
+  "notes": "First release: deep-sky and Moon assessment, GraXpert/Siril automation, Dwarfium and DWARF Wi-Fi import, photo identification, colour overview, comparisons, built-in updates.",
+  "sha256": "d4a79883a078ca8d1e8b1574357e662390f4bf4feda573494ed88218dbd2221f",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.2.0.zip"
+}
