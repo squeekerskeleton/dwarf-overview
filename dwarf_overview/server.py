@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update, control, planner, projects, setupcheck, liveview, learn, netcheck
+from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update, control, planner, projects, setupcheck, liveview, learn, netcheck, diagnose
 
 RESTART_EXIT_CODE = 3  # start-windows.bat relaunches the app when it exits with this code
 
@@ -91,6 +91,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _json(self, obj, code: int = 200) -> None:
+        if code >= 400 and isinstance(obj, dict) and obj.get("error"):
+            diagnose.record("app", urlparse(self.path).path, obj["error"])
         self._send(code, json.dumps(obj).encode("utf-8"), "application/json")
 
     def _live(self, camera: str) -> None:
@@ -323,6 +325,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/setup/done":
                 config.save({"setup_done": True})
                 return self._json({"ok": True})
+            if path == "/api/diagnose":
+                shot = body.pop("screenshot_b64", None) or None
+                use_claude = bool(body.pop("use_claude", True))
+                return self._json({"job_id": tools.start_task(lambda: diagnose.run(body, shot, use_claude),
+                                                              "Looking at what's going wrong")})
+            if path == "/api/diagnose/fix":
+                return self._json(diagnose.apply(str(body["action"]), str(body.get("value") or "")))
             if path == "/api/net/diagnose":
                 addrs = [str(a) for a in body.get("addresses") or []]
                 return self._json({"job_id": tools.start_task(lambda: netcheck.diagnose(addrs),
@@ -366,7 +375,7 @@ class Handler(BaseHTTPRequestHandler):
                 script = body.get("script") or a["assessment"].get("siril_script_text")
                 return self._json({"job_id": tools.run_siril_script(body.get("path") or a["file_path"], script)})
         except (assess.AssessmentError, update.UpdateError, dwarf.DwarfError, dwarfium_web.DwarfiumError,
-                scope.ScopeError, control.ControlError, projects.ProjectError, netcheck.NetError, KeyError) as e:
+                scope.ScopeError, control.ControlError, projects.ProjectError, netcheck.NetError, diagnose.DiagnoseError, KeyError) as e:
             return self._json({"error": str(e)}, 400)
         except (FileNotFoundError, ValueError, KeyError) as e:
             return self._json({"error": str(e)}, 400)

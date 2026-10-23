@@ -124,6 +124,7 @@
   <span id="keyStatus" class="muted"></span>
   <button id="nightBtn" title="Dim orange night-vision mode for use in the field">Night mode</button>
   <button id="setupBtn" title="Check that every program this app uses is installed">Setup</button>
+  <button id="diagBtn" title="Show Claude what you're seeing and get it fixed">Diagnose</button>
   <button id="settingsBtn">Settings</button>
   <button id="stopAll" class="stopall" title="Stop the telescope moving, tracking, capturing and focusing, and stop any GraXpert or Siril run">Stop all</button>
 </header>
@@ -330,6 +331,15 @@
   </div>
 </section>
 
+<dialog id="diagDlg" style="max-width:760px;width:92vw">
+  <h2 style="margin-top:0">What's going wrong?</h2>
+  <textarea id="diagText" rows="3" style="width:100%" placeholder="e.g. Dwarfium keeps connecting then disconnecting"></textarea>
+  <label style="display:block;margin:6px 0"><input type="checkbox" id="diagShot" checked> Include a screenshot of this page (your browser asks which tab to share: pick this one)</label>
+  <p class="caption">Claude gets the app's state: version, settings without your API key, the DWARF connection, recent errors and background jobs. It goes to Claude with your own API key, and a copy is saved in the app's data folder (diagnostics). Fixes only run when you click them.</p>
+  <div class="row" style="justify-content:flex-end"><button id="diagClose">Close</button><button class="primary" id="diagGo">Diagnose</button></div>
+  <div id="diagOut" style="margin-top:10px"></div>
+</dialog>
+
 <dialog id="setupDlg" style="max-width:720px">
   <h2 style="margin-top:0">Set up DWARF Overview</h2>
   <p class="muted">Here's every program the app uses and whether it's on this computer. Click <b>Download</b> to open each program's official download page, install it with the default options, then click <b>Check again</b>.</p>
@@ -383,12 +393,14 @@ const TOKEN = "__TOKEN__";
 const $ = (id) => document.getElementById(id);
 let cfg = {}, current = null, assessment = null, assessmentId = null, latestOutput = null, rating = null;
 
+const pageErrors = [];
+function notePageError(m) { pageErrors.push({ time: new Date().toLocaleTimeString(), message: String(m).slice(0, 500) }); if (pageErrors.length > 30) pageErrors.shift(); }
 async function api(path, body) {
   const opts = { headers: { "X-Token": TOKEN } };
   if (body !== undefined) { opts.method = "POST"; opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
   const r = await fetch(path, opts);
   const data = await r.json().catch(() => ({ error: "Bad response" }));
-  if (!r.ok || data.error) throw new Error(data.error || r.statusText);
+  if (!r.ok || data.error) { notePageError(`${path}: ${data.error || r.statusText}`); throw new Error(data.error || r.statusText); }
   return data;
 }
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -923,6 +935,59 @@ async function openSetup() {
   } catch (e) { $("setupList").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
 }
 $("setupBtn").onclick = openSetup;
+
+// ---------------- diagnose
+window.addEventListener("error", (e) => notePageError(e.message + (e.filename ? ` (${e.filename.split("/").pop()}:${e.lineno})` : "")));
+window.addEventListener("unhandledrejection", (e) => notePageError("Unhandled: " + (e.reason && e.reason.message || e.reason)));
+async function grabScreen() {
+  const stream = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: "browser" }, audio: false, preferCurrentTab: true, selfBrowserSurface: "include" });
+  try {
+    const v = document.createElement("video"); v.srcObject = stream; v.muted = true; await v.play();
+    await new Promise((r) => setTimeout(r, 400));
+    const s = Math.min(1, 1600 / v.videoWidth), c = document.createElement("canvas");
+    c.width = Math.round(v.videoWidth * s); c.height = Math.round(v.videoHeight * s);
+    c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.8).split(",")[1];
+  } finally { stream.getTracks().forEach((tr) => tr.stop()); }
+}
+$("diagBtn").onclick = () => { $("diagOut").innerHTML = ""; $("diagDlg").showModal(); $("diagText").focus(); };
+$("diagClose").onclick = () => $("diagDlg").close();
+$("diagGo").onclick = async () => {
+  const tab = (document.querySelector("button.tab.active") || {}).dataset?.tab || "";
+  const visible = [...document.querySelectorAll(".error, .warn, .ok, [id$='Status']")].filter((el) => el.offsetParent && el.textContent.trim() && !el.closest("#diagDlg")).map((el) => el.textContent.trim().slice(0, 300)).slice(0, 40);
+  let shot = null;
+  if ($("diagShot").checked) {
+    $("diagDlg").close();
+    try { shot = await grabScreen(); } catch (e) { notePageError("Screenshot skipped: " + e.message); }
+    $("diagDlg").showModal();
+  }
+  $("diagOut").innerHTML = '<span class="spinner"></span> Claude is looking&hellip;';
+  try {
+    const r = await runJob("/api/diagnose", { problem: $("diagText").value, tab, visible_messages: visible, errors: pageErrors, url: location.pathname, browser: navigator.userAgent, screenshot_b64: shot }, $("diagOut"), "Claude is looking");
+    const d = r.diagnosis;
+    $("diagOut").innerHTML = `<p><b>${esc(d.summary)}</b></p>` +
+      (d.likely_causes.length ? "<h3>Likely cause</h3><ul>" + d.likely_causes.map((c) => `<li>${esc(c.cause)} <span class="caption">(${esc(c.confidence)}: ${esc(c.evidence)})</span></li>`).join("") + "</ul>" : "") +
+      (d.steps.length ? "<h3>What to do</h3><ol>" + d.steps.map((s) => `<li>${esc(s)}</li>`).join("") + "</ol>" : "") +
+      (d.fixes.length ? "<h3>Fixes</h3>" + d.fixes.map((f, i) => `<div class="row" style="margin:4px 0"><button class="primary" data-fix="${i}">${esc(f.label)}</button><span class="caption">${esc(f.why)}</span></div>`).join("") : "") +
+      (d.needs_update ? `<p class="warn">Needs an app update: ${esc(d.needs_update)} Tell Claude in your project chat; the details are saved.</p>` : "") +
+      `<p class="caption">Saved to ${esc(r.saved_to)}</p>`;
+    $("diagOut").querySelectorAll("[data-fix]").forEach((b) => b.onclick = async () => {
+      const f = d.fixes[+b.dataset.fix];
+      if (f.client_side) {
+        $("diagDlg").close();
+        if (f.action === "reload_page") location.reload();
+        else if (f.action === "open_settings") $("settingsBtn").click();
+        else if (f.action === "open_setup") openSetup();
+        else if (f.action === "open_tab") { const t = document.querySelector(`button.tab[data-tab="${CSS.escape(f.value)}"]`); if (t) t.click(); }
+        return;
+      }
+      if (!confirm(f.label + "?")) return;
+      b.disabled = true;
+      try { const res = await api("/api/diagnose/fix", { action: f.action, value: f.value }); b.insertAdjacentHTML("afterend", ` <span class="ok">${esc(res.done)}</span>`); cfg = await api("/api/config"); }
+      catch (e) { b.insertAdjacentHTML("afterend", ` <span class="error">${esc(e.message)}</span>`); b.disabled = false; }
+    });
+  } catch (e) { $("diagOut").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+};
 $("setupRecheck").onclick = async () => { await loadConfig(); openSetup(); };
 $("setupDone").onclick = async () => { await api("/api/setup/done", {}); cfg.setup_done = true; $("setupDlg").close(); };
 

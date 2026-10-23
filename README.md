@@ -122,6 +122,19 @@ If the DWARF isn't on your Wi-Fi, there are backup ways to reach it:
 - **Bluetooth**, in Chrome or Edge. It shows which network the DWARF is on and its address, and can ask it to rejoin its saved Wi-Fi. These are the same setup messages the DWARFLAB app and Dwarfium use. Bluetooth can't carry control or pictures. Close the DWARFLAB phone app first, since only one device can connect at a time.
 - **USB-C.** The tab shows when the DWARF's drive is plugged in. USB-C carries files only.
 
+## Diagnose
+
+Click **Diagnose** at the top, say what's going wrong, and leave **Include a screenshot** ticked. Your browser asks which tab to share: pick the DWARF Overview tab. Claude then gets the screenshot plus the app's state:
+- version and settings, without your API key;
+- the DWARF connection and control link;
+- Dwarfium's status;
+- recent errors from the app and the page;
+- recent background jobs.
+
+Claude replies with the likely cause and steps to fix it. It can also offer one-click fixes: find the DWARF, test connections, connect or hand back control, save an address, switch the mount, or open a tab or Settings. A fix only runs when you click it.
+
+If the problem needs a change to the app itself, it says so. Each report is also saved to `%APPDATA%\DwarfOverview\diagnostics` (the last 10 are kept), so Claude can read the details when you ask in your project chat. Diagnose uses your API key, and needs the internet.
+
 ## Calibrate & learn
 
 Recommendations start from DWARFLAB's DWARF 3 manual and community guides:

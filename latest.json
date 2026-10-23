@@ -1,6 +1,6 @@
 {
-  "version": "0.5.1",
-  "notes": "Network tab checks the DWARF's control port less often, and Plan & Control explains that only one app can control the DWARF at a time.",
-  "sha256": "22db3988be03efe12d540e8ac31ad02cd66bcadfbcfd9589d332cc739463ea4a",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.5.1.zip"
+  "version": "0.5.2",
+  "notes": "New Diagnose button: show Claude what you're seeing (screenshot plus the app's state and recent errors), get the likely cause, steps, and one-click fixes.",
+  "sha256": "de16bba54208f751ad1bee8eb9079d1f131f510438daa0e802c51bd0c625740c",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.5.2.zip"
 }
