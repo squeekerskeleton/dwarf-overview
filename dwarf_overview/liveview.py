@@ -87,6 +87,28 @@ class _Reader:
             self.cv.notify_all()
 
 
+def _rtsp_answers(ip: str, url: str, timeout: float = 2.0) -> bool:
+    """True once the DWARF's RTSP service answers OPTIONS (it accepts connections but stays silent while the
+    camera stream isn't running)."""
+    import socket
+    try:
+        with socket.create_connection((ip, 554), timeout=timeout) as s:
+            s.settimeout(timeout)
+            s.sendall(f"OPTIONS {url} RTSP/1.0\r\nCSeq: 1\r\n\r\n".encode())
+            return s.recv(64).startswith(b"RTSP/")
+    except OSError:
+        return False
+
+
+def _wait_for_rtsp(ip: str, url: str, seconds: float = 8) -> bool:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if _rtsp_answers(ip, url):
+            return True
+        time.sleep(0.5)
+    return False
+
+
 _READERS: dict[str, _Reader] = {}
 _LOCK = threading.Lock()
 
@@ -106,7 +128,7 @@ def _reader(camera: str, go_live: bool = False) -> _Reader:
         opened = control.open_preview(camera, go_live=go_live)
     except control.ControlError as e:
         raise LiveError(f"Couldn't switch the DWARF's camera on: {e}")
-    time.sleep(2)  # give the camera a moment to start streaming
+    opened["video_service"] = "answering" if _wait_for_rtsp(ip, url) else "silent"
     with _LOCK:
         r = _READERS.get(url)
         if not r or not r.alive:
@@ -148,7 +170,8 @@ def start(camera: str = "tele", timeout: float = 30) -> dict:
         r.alive = False
     if r.frame is None:
         o = getattr(r, "opened", {}) or {}
-        codes = f"enterCamera {o.get('enter_code')}, goLive {o.get('live_code')}, preview {o.get('preview_code')}"
+        codes = (f"enterCamera {o.get('enter_code')}, goLive {o.get('live_code')}, open camera {o.get('open_code')}, "
+                 f"preview {o.get('preview_code')}; video service {o.get('video_service')}")
         raise LiveError(f"{r.error or 'The camera is on but no picture arrived.'} (DWARF replies: {codes}; "
                         "0 means OK.) If the DWARFLAB phone app or Dwarfium is open, close it and try again.")
     r.last_viewer = time.monotonic()  # keep it running while the page connects

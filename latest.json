@@ -1,6 +1,6 @@
 {
-  "version": "0.6.3",
-  "notes": "Plan & Control shows battery, temperature and storage. Live view retries with goLive (what Dwarfium sends) and shows the DWARF's reply codes. Every command and reply is logged to dwarf-commands.log and included in Diagnose.",
-  "sha256": "4d00f8e954debbaeff7384d015b23c4ea37699f78a8269af8b2a9a95b71911c4",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.3.zip"
+  "version": "0.6.4",
+  "notes": "Live view also sends the open-camera command the DWARFLAB app uses and waits for the DWARF's video service to answer; errors say whether it did. Pressing Connect now saves the AWAY position you set by hand (reading it moves nothing).",
+  "sha256": "06bd9433e3721735793016d480afc72f78ac2f2ef89a913750edacfa637a3e8d",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.4.zip"
 }

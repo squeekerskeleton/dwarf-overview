@@ -110,6 +110,15 @@ def _log(direction: str, module: int, cmd: int, typ: int, data: bytes) -> None:
         pass
 
 
+def _note(text: str) -> None:
+    with _LOG_LOCK:
+        try:
+            with open(log_path(), "a", encoding="utf-8") as fh:
+                fh.write(f"{time.strftime('%H:%M:%S')} {text}\n")
+        except OSError:
+            pass
+
+
 def log_tail(lines: int = 150) -> list[str]:
     try:
         return log_path().read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
@@ -175,13 +184,7 @@ class Link:
                     self.replies.setdefault((module, cmd), []).append({"type": typ, "data": data})
                     self.cv.notify_all()
         except (OSError, ConnectionError) as e:
-            _log("xx", 0, 0, 0, b"")
-            with _LOG_LOCK:
-                try:
-                    with open(log_path(), "a", encoding="utf-8") as fh:
-                        fh.write(f"{time.strftime('%H:%M:%S')} link closed: {type(e).__name__}: {e}\n")
-                except OSError:
-                    pass
+            _note(f"link closed: {type(e).__name__}: {e}")
         finally:
             self.closed = True
             with self.cv:
@@ -411,6 +414,15 @@ def connect() -> dict:
         lock = l.request(4, 13004, f_bool(1, True), timeout=6)["code"]
     except ControlError:
         lock = None
+    if config.load().get("away_pending"):
+        # The AWAY position set by hand is measured when the app next connects (reading it moves nothing).
+        def note_away():
+            time.sleep(2)
+            try:
+                record_away()
+            except Exception as e:
+                _note(f"AWAY position not read: {e}")
+        threading.Thread(target=note_away, daemon=True).start()
     return {"ip": l.ip, "name": info.get("name"), "model": info.get("model"), "control": lock == 0,
             "control_code": lock}
 
@@ -420,7 +432,8 @@ def open_preview(camera: str = "tele", go_live: bool = False) -> dict:
 
     enterCamera (14/16404), optionally goLive for that camera (tele 3/11010, wide 3/11020, which a cold DWARF
     needs before it streams; it also ends live stacking, so it's only sent when the plain way gave no picture),
-    then the preview-quality request (tele 1/10050, wide 2/12036, level 1). Nothing moves or focuses.
+    open camera (tele 1/10000, wide 2/12000), then the preview-quality request (tele 1/10050, wide 2/12036,
+    level 1). Nothing moves or focuses.
     """
     l = link(connect=True)
     if not _WANTED:
@@ -429,18 +442,27 @@ def open_preview(camera: str = "tele", go_live: bool = False) -> dict:
     if r["code"] != 0:
         raise ControlError(f"The DWARF wouldn't open its camera (code {r['code']}). If the DWARFLAB phone app or "
                            "Dwarfium is in control, close it and try again.")
-    live_code = None
+    live_code = open_code = None
     if go_live:
         try:
             live_code = l.request(3, 11010 if camera == "tele" else 11020, b"", timeout=8)["code"]
         except ControlError:
             live_code = "no reply"
+    if True:
+        # Open camera (tele 1/10000, wide 2/12000), which the DWARFLAB app still sends: no binning, RTSP
+        # encoding 1 (the same encoding enterCamera asks for).
+        try:
+            open_code = l.request(1 if camera == "tele" else 2, 10000 if camera == "tele" else 12000,
+                                  f_bool(1, False) + f_int(2, 1), timeout=8)["code"]
+        except ControlError:
+            open_code = "no reply"
     module, cmd = (1, 10050) if camera == "tele" else (2, 12036)
     try:
         code = l.request(module, cmd, f_int(1, 1), timeout=5)["code"]
     except ControlError:  # older firmware doesn't know this request; the camera is already on
         code = None
-    return {"camera": camera, "enter_code": r["code"], "live_code": live_code, "preview_code": code}
+    return {"camera": camera, "enter_code": r["code"], "live_code": live_code, "open_code": open_code,
+            "preview_code": code}
 
 
 # ---------------------------------------------------------------- AWAY (stow) and reboot
