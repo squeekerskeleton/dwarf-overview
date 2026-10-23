@@ -18,6 +18,28 @@
   button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; }
   button:hover { border-color: var(--accent); }
   button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  button.primary { background: var(--accent2, #1f6feb); border-color: var(--accent2, #1f6feb); }
+  .twocol { display: grid; grid-template-columns: minmax(340px, 1fr) minmax(420px, 1.2fr); gap: 14px; padding: 16px; }
+  @media (max-width: 1000px) { .twocol { grid-template-columns: 1fr; } }
+  .tcard { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 8px; background: var(--panel2); }
+  .tcard .t { font-weight: 600; }
+  .chip { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--accent); color: var(--accent); margin-right: 4px; }
+  .timeline { display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); margin: 6px 0 2px; }
+  .timeline div { font-size: 11px; padding: 4px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-right: 1px solid var(--bg); background: color-mix(in srgb, var(--accent2, #1f6feb) 55%, var(--panel)); }
+  #liveBox { position: relative; overflow: hidden; background: #000; border-radius: 8px; aspect-ratio: 16 / 9; outline: none; }
+  #liveBox:focus { box-shadow: 0 0 0 2px var(--accent); }
+  #liveImg { width: 100%; height: 100%; object-fit: contain; transform-origin: 0 0; user-select: none; -webkit-user-drag: none; }
+  #liveMsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 20px; }
+  .pad { display: grid; grid-template-columns: repeat(3, 44px); gap: 4px; }
+  .pad button { height: 40px; padding: 0; }
+  .pad button.on { border-color: var(--accent); color: var(--accent); }
+  .swatches { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; margin: 4px 0 8px; }
+  .swatches button { height: 26px; padding: 0; border: 2px solid transparent; }
+  .swatches button.sel { border-color: var(--text); }
+  .swatches button.swdefault { grid-column: 1 / -1; height: 22px; color: #fff; font-size: 12px; }
+  #projRoot { word-break: break-all; }
+  .setupitem { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: start; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .ovtable td { padding: 1px 8px 1px 0; vertical-align: top; } .ovtable td:first-child { color: var(--muted); white-space: nowrap; }
   button.stopall { background: #b62324; border-color: #f85149; color: #fff; font-weight: 600; }
   button.stopall:hover { background: #da3633; border-color: #fff; }
   button:disabled { opacity: .5; cursor: default; }
@@ -90,14 +112,18 @@
 <header>
   <h1>DWARF Overview</h1>
   <button class="tab active" data-tab="work">Assess</button>
+  <button class="tab" data-tab="control">Plan &amp; Control</button>
   <button class="tab" data-tab="scope">Telescope</button>
   <button class="tab" data-tab="dwarf">From DWARF</button>
   <button class="tab" data-tab="history">History</button>
+  <button class="tab" data-tab="projects">Projects</button>
+  <button class="tab" data-tab="net">Network</button>
   <span class="spacer"></span>
   <button id="dwarfiumBtn" class="hidden" title="Open Dwarfium to control the telescope">Open Dwarfium</button>
   <button id="updateBtn" title="Check for a new version">v<span id="version"></span></button>
   <span id="keyStatus" class="muted"></span>
   <button id="nightBtn" title="Dim orange night-vision mode for use in the field">Night mode</button>
+  <button id="setupBtn" title="Check that every program this app uses is installed">Setup</button>
   <button id="settingsBtn">Settings</button>
   <button id="stopAll" class="stopall" title="Stop the telescope moving, tracking, capturing and focusing, and stop any GraXpert or Siril run">Stop all</button>
 </header>
@@ -123,7 +149,7 @@
       <div class="card">
         <div class="row" style="justify-content: space-between"><h2 id="fileTitle"></h2>
           <div class="row"><div class="modebar" title="Deep-sky or Moon. Auto-detected; click to switch."><button data-mode="deepsky">Deep sky</button><button data-mode="moon">Moon</button></div>
-            <button data-open="folder">Show folder</button><span id="openBtns" class="row"></span></div></div>
+            <button data-open="folder">Show folder</button><button id="addToProject" title="Copy this photo into a project folder">Add to project</button><span id="openBtns" class="row"></span></div></div>
         <div class="previews"><div><img id="ovImg" alt="Whole frame preview"><div class="caption" id="ovCap"></div></div>
           <div><img id="crImg" alt="Crop at 100%"><div class="caption" id="crCap">Centre crop at 100%</div></div></div>
         <div id="shotInfo" class="caption"></div>
@@ -213,6 +239,103 @@
       <div id="dwDetail"></div></div></div>
 </section>
 
+<section id="controlTab" class="hidden">
+  <div class="twocol">
+    <div>
+      <div class="card"><h2>Plan a night</h2>
+        <div class="row"><input type="date" id="planDate" style="width:auto"><button class="primary" id="planBtn">Show best targets</button><span id="planSite" class="caption"></span></div>
+        <div id="planSummary" class="caption" style="margin-top:6px"></div>
+        <div id="planSchedule"></div>
+      </div>
+      <div id="planList"></div>
+    </div>
+    <div>
+      <div class="card"><h2>Telescope</h2>
+        <div class="row"><button class="primary" id="ctlConnect">Connect</button><button id="ctlDisconnect">Disconnect</button><button id="ctlFind">Find my DWARF</button><span id="ctlStatus" class="muted"></span></div>
+        <div id="gotoStatus" class="caption" style="margin-top:4px"></div>
+      </div>
+      <div class="card"><h2>Live view and moving</h2>
+        <div class="row" style="margin-bottom:6px"><span class="modebar"><button id="camTele" class="on">Telephoto</button><button id="camWide">Wide</button></span>
+          <button id="liveStart">Show live view</button><button id="liveStop">Hide</button><span class="caption">Scroll to zoom, double-click to reset.</span></div>
+        <div id="liveBox" tabindex="0"><img id="liveImg" alt="Live view" class="hidden"><div id="liveMsg">Live view is off.</div></div>
+        <div class="row" style="margin-top:10px;align-items:flex-start">
+          <div class="pad"><span></span><button data-dir="w" title="Tilt up (W)">W &uarr;</button><span></span>
+            <button data-dir="a" title="Left (A)">A &larr;</button><button id="padStop" title="Stop">&#9632;</button><button data-dir="d" title="Right (D)">D &rarr;</button>
+            <span></span><button data-dir="s" title="Tilt down (S)">S &darr;</button><span></span></div>
+          <div style="flex:1;min-width:180px"><label for="joySpeed">Speed <span id="joySpeedVal"></span></label><input type="range" id="joySpeed" min="0.05" max="1" step="0.05" value="0.4">
+            <p class="caption">Click the live view (or anywhere on this tab), then hold <b>W</b>/<b>S</b> to tilt up/down and <b>A</b>/<b>D</b> to turn left/right. Hold <b>Shift</b> for full speed. Letting go stops the telescope; it also stops by itself if the app loses contact.</p></div>
+        </div>
+      </div>
+      <div class="card"><h2>Camera settings</h2>
+        <div class="row" style="gap:14px"><label style="margin:0">Mount <select id="mountSel"><option value="altaz">Alt-Az (normal)</option><option value="eq">EQ mode (wedge)</option></select></label>
+          <label style="margin:0"><input type="checkbox" id="learnOn"> Calibrate &amp; learn</label>
+          <label style="margin:0"><input type="checkbox" id="autoApply"> Auto-apply recommended settings</label></div>
+        <div class="caption" id="learnSummary"></div>
+        <div class="row" id="presetBtns" style="margin-top:6px"></div>
+        <div class="grid2" style="margin-top:8px">
+          <div><label for="camFilter">Filter</label><select id="camFilter"><option value="0">VIS</option><option value="1">Astro</option><option value="2">Duo-band</option></select></div>
+          <div><label for="camExp">Exposure (seconds)</label><select id="camExp"></select></div>
+          <div><label for="camGain">Gain</label><select id="camGain"></select></div>
+          <div><label for="camFrames">Frames to stack</label><input id="camFrames" type="number" min="1" max="999" value="240"></div>
+        </div>
+        <div id="camNote" class="caption"></div>
+        <div class="row" style="margin-top:8px"><button class="primary" id="capStart">Start capture</button><button id="capStop">Stop capture</button><span id="capStatus" class="muted"></span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="projectsTab" class="hidden">
+  <div class="twocol" style="grid-template-columns: 280px 1fr">
+    <div><div class="card"><h2>Projects</h2>
+      <div class="row"><input id="projName" placeholder="New project name, e.g. Heart Nebula 2026"><button class="primary" id="projCreate">Create</button></div>
+      <div class="caption" id="projRoot"></div>
+      <ul id="projList" style="list-style:none;padding:0;margin:8px 0 0"></ul></div></div>
+    <div id="projDetail"><div class="card"><p class="muted">Create a project, or pick one. Each project is a folder for your finished photos, with notes and an overview of every photo. Add photos with <b>Add to project</b> on the Assess tab.</p></div></div>
+  </div>
+</section>
+
+<section id="netTab" class="hidden">
+  <div class="twocol">
+    <div>
+      <div class="card"><h2>Connection right now</h2>
+        <div class="row" style="justify-content:space-between"><span id="netBadge" class="chip">Checking&hellip;</span><span class="caption" id="netUpdated"></span></div>
+        <table class="ovtable" id="netNow" style="margin-top:8px"></table>
+        <div class="caption" style="margin-top:10px">Round-trip time to the DWARF, last 2 minutes (gaps are missed checks)</div>
+        <svg id="netSpark" viewBox="0 0 300 70" preserveAspectRatio="none" style="width:100%;height:80px;background:var(--panel2,rgba(127,127,127,.08));border-radius:6px"></svg>
+        <div class="caption" id="netStats"></div>
+      </div>
+      <div class="card"><h2>This laptop</h2><table class="ovtable" id="netLaptop"></table></div>
+    </div>
+    <div>
+      <div class="card"><h2>Find and test</h2>
+        <div class="row"><button class="primary" id="netFind">Find my DWARF</button><button id="netTest">Test all connections</button></div>
+        <div id="netFindStatus" class="caption" style="margin-top:6px"></div>
+        <div id="netRoutes" style="margin-top:8px"></div>
+        <p class="caption">The test measures each way the DWARF answers right now: round trip, jitter and dropped connections on its control port, its response time, and download speed from its file server. The steadiest one is picked and saved.</p>
+      </div>
+      <div class="card"><h2>Backup connections</h2>
+        <h3 style="margin:4px 0">The DWARF's own hotspot</h3>
+        <div id="netHotspots" class="caption">Looking for DWARF hotspots&hellip;</div>
+        <div class="row" style="margin-top:6px"><input id="hotspotPw" type="password" placeholder="Hotspot password (blank = factory default)" autocomplete="off" style="flex:1"><button id="netRejoin">Back to my Wi-Fi</button></div>
+        <p class="caption">Joining the hotspot moves the laptop's Wi-Fi onto the DWARF. If the laptop is also wired to your router, it keeps the internet through the cable; if not, it's offline until you click Back to my Wi-Fi. Claude assessments need the internet; telescope control doesn't.</p>
+        <h3 style="margin:12px 0 4px">Bluetooth</h3>
+        <div class="row"><button id="bleFind">Find over Bluetooth</button><button id="bleRejoin" class="hidden">Ask it to rejoin its Wi-Fi</button></div>
+        <div id="bleStatus" class="caption" style="margin-top:6px">Bluetooth can show which network the DWARF is on and its address, and ask it to rejoin its saved Wi-Fi. It can't carry control or pictures. Needs Chrome or Edge, and the DWARFLAB phone app closed.</div>
+        <h3 style="margin:12px 0 4px">USB-C</h3>
+        <div id="netUsb" class="caption"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<dialog id="setupDlg" style="max-width:720px">
+  <h2 style="margin-top:0">Set up DWARF Overview</h2>
+  <p class="muted">Here's every program the app uses and whether it's on this computer. Click <b>Download</b> to open each program's official download page, install it with the default options, then click <b>Check again</b>.</p>
+  <div id="setupList"></div>
+  <div class="row" style="margin-top:12px;justify-content:flex-end"><button id="setupRecheck">Check again</button><button class="primary" id="setupDone">Done</button></div>
+</dialog>
+
 <section id="historyTab" class="hidden" style="padding:16px">
   <div class="card"><h2>Your sessions</h2><p class="muted">Every assessment is logged on this computer. The most relevant ones (same target, same filter) go along with each new request.</p>
     <div style="overflow:auto"><table id="histTable"></table></div></div>
@@ -242,7 +365,10 @@
     <div><label for="libFolder">Save DWARF downloads to</label><input id="libFolder" placeholder="Pictures\DWARF Library"></div></div>
   <div class="grid2"><div><label for="siteLat">Your site's latitude (for Dwarfium)</label><input id="siteLat" placeholder="e.g. 48.77"></div>
     <div><label for="siteLon">longitude (west is negative)</label><input id="siteLon" placeholder="e.g. -104.56"></div></div>
-  <div class="row" style="margin-top:6px"><button id="siteHere" type="button">Use this laptop's location</button><span id="siteStatus" class="caption"></span></div>
+  <div class="row" style="margin-top:6px"><input id="siteName" placeholder="Site name, e.g. Plentywood, MT" style="flex:1"><button id="siteHere" type="button">Use this laptop's location</button></div><span id="siteStatus" class="caption"></span>
+  <label for="projFolder">Projects folder</label><input id="projFolder" placeholder="Pictures\DWARF Projects">
+  <label>Theme: primary colour <span class="caption">(highlights, active tabs, links)</span></label><div class="swatches" id="swPrimary"></div>
+  <label>Secondary colour <span class="caption">(main buttons, schedule bars)</span></label><div class="swatches" id="swSecondary"></div>
   <label for="astapPath">ASTAP plate solver (leave blank to auto-detect)</label><input id="astapPath">
   <label for="dwarfiumPath">Dwarfium desktop app (leave blank to auto-detect)</label><input id="dwarfiumPath">
   <label for="dwarfiumWeb">Dwarfium web address (for the Telescope tab)</label><input id="dwarfiumWeb" placeholder="http://127.0.0.1:8000">
@@ -273,6 +399,7 @@ async function loadConfig() {
   $("keyStatus").className = cfg.has_api_key ? "muted" : "error";
   $("version").textContent = cfg.version;
   $("dwarfiumBtn").classList.toggle("hidden", !cfg.tools.dwarfium);
+  applyTheme(cfg.theme_primary, cfg.theme_secondary);
 }
 $("dwarfiumBtn").onclick = () => api("/api/open", { tool: "dwarfium", path: "" }).catch((e) => alert(e.message));
 
@@ -313,18 +440,18 @@ $("settingsBtn").onclick = () => {
   $("model").value = cfg.model; $("effort").value = cfg.effort; $("sirilPath").value = cfg.siril_path;
   $("gxPath").value = cfg.graxpert_path; $("startFolder").value = cfg.start_folder;
   $("ppPath").value = cfg.pipp_path; $("asPath").value = cfg.autostakkert_path; $("rxPath").value = cfg.registax_path;
-  $("dwarfIp").value = cfg.dwarf_ip; $("siteLat").value = cfg.site_lat; $("siteLon").value = cfg.site_lon; $("siteStatus").textContent = ""; $("libFolder").value = cfg.library_folder; $("dwarfiumPath").value = cfg.dwarfium_path; $("astapPath").value = cfg.astap_path; $("dwarfiumWeb").value = cfg.dwarfium_web_url; $("updateUrl").value = cfg.update_url;
+  $("dwarfIp").value = cfg.dwarf_ip; $("siteLat").value = cfg.site_lat; $("siteLon").value = cfg.site_lon; $("siteName").value = cfg.site_name || ""; $("projFolder").value = cfg.projects_folder || ""; drawSwatches(); $("siteStatus").textContent = ""; $("libFolder").value = cfg.library_folder; $("dwarfiumPath").value = cfg.dwarfium_path; $("astapPath").value = cfg.astap_path; $("dwarfiumWeb").value = cfg.dwarfium_web_url; $("updateUrl").value = cfg.update_url;
   $("imPath").value = cfg.imppg_path; $("otherName").value = cfg.other_app_name; $("otherPath").value = cfg.other_app_path;
   const t = cfg.tools, f = (v) => v ? '<span class="ok">found</span>' : '<span class="error">not found</span>';
   $("toolStatus").innerHTML = `GraXpert: ${f(t.graxpert)} &middot; Siril: ${f(t.siril)} &middot; siril-cli: ${f(t.siril_cli)}<br>ASTAP: ${f(t.astap)} &middot; Dwarfium: ${f(t.dwarfium)} &middot; PIPP: ${f(t.pipp)} &middot; AutoStakkert: ${f(t.autostakkert)} &middot; RegiStax: ${f(t.registax)} &middot; ImPPG: ${f(t.imppg)}<br>Data folder: ${esc(cfg.data_dir)}`;
   $("settings").showModal();
 };
-$("closeSettings").onclick = () => $("settings").close();
+$("closeSettings").onclick = () => { $("settings").close(); applyTheme(cfg.theme_primary, cfg.theme_secondary); };
 $("saveSettings").onclick = async () => {
   cfg = await api("/api/config", { api_key: $("apiKey").value, model: $("model").value.trim(), effort: $("effort").value,
     siril_path: $("sirilPath").value.trim(), graxpert_path: $("gxPath").value.trim(), start_folder: $("startFolder").value.trim(),
     pipp_path: $("ppPath").value.trim(), autostakkert_path: $("asPath").value.trim(), registax_path: $("rxPath").value.trim(),
-    imppg_path: $("imPath").value.trim(), dwarf_ip: $("dwarfIp").value.trim(), site_lat: $("siteLat").value.trim(), site_lon: $("siteLon").value.trim(), library_folder: $("libFolder").value.trim(),
+    imppg_path: $("imPath").value.trim(), dwarf_ip: $("dwarfIp").value.trim(), site_lat: $("siteLat").value.trim(), site_lon: $("siteLon").value.trim(), site_name: $("siteName").value.trim(), projects_folder: $("projFolder").value.trim(), theme_primary: themePick.primary, theme_secondary: themePick.secondary, library_folder: $("libFolder").value.trim(),
     dwarfium_path: $("dwarfiumPath").value.trim(), astap_path: $("astapPath").value.trim(), dwarfium_web_url: $("dwarfiumWeb").value.trim(), update_url: $("updateUrl").value.trim(), other_app_name: $("otherName").value.trim(), other_app_path: $("otherPath").value.trim() });
   $("settings").close(); loadConfig();
 };
@@ -347,6 +474,13 @@ document.querySelectorAll(".tab").forEach((b) => b.onclick = () => {
   $("historyTab").classList.toggle("hidden", b.dataset.tab !== "history");
   $("dwarfTab").classList.toggle("hidden", b.dataset.tab !== "dwarf");
   $("scopeTab").classList.toggle("hidden", b.dataset.tab !== "scope");
+  $("controlTab").classList.toggle("hidden", b.dataset.tab !== "control");
+  $("projectsTab").classList.toggle("hidden", b.dataset.tab !== "projects");
+  $("netTab").classList.toggle("hidden", b.dataset.tab !== "net");
+  if (b.dataset.tab === "net") netStart(); else netStop();
+  if (b.dataset.tab !== "control") joyRelease();
+  if (b.dataset.tab === "control") openControl();
+  if (b.dataset.tab === "projects") loadProjects();
   if (b.dataset.tab === "scope") { loadScope(); showDwarfAddr(); }
   if (b.dataset.tab === "dwarf") api("/api/dwarf/usb").then((u) => { if (u.folders.length) setVia("usb"); }).catch(() => {});
   if (b.dataset.tab === "history") loadHistory();
@@ -689,7 +823,7 @@ async function findDwarf(statusEl) {
       if (j.state !== "done") throw new Error(j.error || "The search failed.");
       const devs = j.output.devices;
       if (!devs.length) {
-        statusEl.innerHTML = `<span class="error">No DWARF found.</span> Searched ${esc(j.output.searched.join(", "))}. Make sure the DWARF is on and the laptop is on the same Wi-Fi or the DWARF's hotspot.`;
+        statusEl.innerHTML = `<span class="error">No DWARF found.</span> Checked ${j.output.addresses_checked || "every"} addresses on ${esc(j.output.searched.join(", "))}${j.output.answered && j.output.answered.length ? ` (${j.output.answered.length} other device${j.output.answered.length > 1 ? "s" : ""} answered, none a DWARF)` : ""}. Make sure the DWARF is on and the laptop is on the same Wi-Fi or the DWARF's hotspot.`;
         return null;
       }
       let d = devs[0];
@@ -737,6 +871,439 @@ $("stopAll").onclick = async () => {
 };
 $("stopClose").onclick = () => $("stopDlg").close();
 
+// ---------------- theme (30 earth tones)
+const EARTH = [["Terracotta","#c8623e"],["Burnt sienna","#a0522d"],["Rust","#b7410e"],["Clay","#b66a50"],["Adobe","#bd6c48"],
+  ["Copper","#b87333"],["Ochre","#cc7722"],["Mustard","#c9a227"],["Dark goldenrod","#b8860b"],["Sand","#c2b280"],
+  ["Wheat","#d8c08f"],["Khaki","#a39770"],["Olive","#708238"],["Moss","#8a9a5b"],["Sage","#9caf88"],
+  ["Fern","#4f7942"],["Forest","#2e5e3a"],["Pine","#2f5d50"],["Juniper","#6b8e7f"],["Lichen","#a7b39a"],
+  ["Slate","#6a7b8c"],["Storm","#5b6770"],["Lake","#4a6d7c"],["Dusk teal","#3e6b6b"],["Stone","#8b8378"],
+  ["Taupe","#8b7d6b"],["Mushroom","#a08f7d"],["Umber","#635147"],["Walnut","#5c4033"],["Desert rose","#b5838d"]];
+let themePick = { primary: "", secondary: "" };
+function lighten(hex) {
+  const n = parseInt(hex.slice(1), 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  if (lum >= 0.45) return hex;
+  const k = Math.min(0.6, 0.45 - lum + 0.25), m = (c) => Math.round(c + (255 - c) * k);
+  return "#" + [m(r), m(g), m(b)].map((c) => c.toString(16).padStart(2, "0")).join("");
+}
+function applyTheme(primary, secondary) {
+  const root = document.documentElement.style;
+  if (primary) root.setProperty("--accent", lighten(primary)); else root.removeProperty("--accent");
+  if (secondary) root.setProperty("--accent2", secondary); else root.removeProperty("--accent2");
+}
+function drawSwatches() {
+  themePick = { primary: cfg.theme_primary || "", secondary: cfg.theme_secondary || "" };
+  for (const [id, key] of [["swPrimary", "primary"], ["swSecondary", "secondary"]]) {
+    $(id).innerHTML = EARTH.map(([n, c]) => `<button type="button" data-c="${c}" title="${n}" style="background:${c}"></button>`).join("") +
+      `<button type="button" data-c="" class="swdefault" style="background:${key === "primary" ? "#6ea8fe" : "#1f6feb"}">Original blue</button>`;
+    const mark = () => $(id).querySelectorAll("button").forEach((b) => b.classList.toggle("sel", b.dataset.c === themePick[key]));
+    $(id).querySelectorAll("button").forEach((b) => b.onclick = () => { themePick[key] = b.dataset.c; mark(); applyTheme(themePick.primary, themePick.secondary); });
+    mark();
+  }
+}
+
+// ---------------- first-time setup and software check
+async function openSetup() {
+  $("setupList").innerHTML = '<span class="spinner"></span> Checking&hellip;';
+  if (!$("setupDlg").open) $("setupDlg").showModal();
+  try {
+    const r = await api("/api/setup/check");
+    const groups = [["required", "Needed to run"], ["recommended", "Recommended"], ["optional", "Optional (Moon processing)"]];
+    $("setupList").innerHTML = groups.map(([lvl, title]) => `<h3 style="margin:12px 0 0;font-size:13px">${title}</h3>` +
+      r.items.filter((i) => i.level === lvl).map((i) => `<div class="setupitem"><span class="${i.found ? "ok" : lvl === "optional" ? "muted" : "error"}">${i.found ? "&#10003;" : "&#10007;"}</span>
+        <div><b>${esc(i.name)}</b> <span class="caption">${esc(i.detail || "")}</span><div class="caption">${esc(i.why)}</div></div>
+        <div>${i.found ? "" : i.action === "install_dwarfium" ? '<button data-act="dwarfium">Install</button>' : i.action === "settings" ? '<button data-act="settings">Open Settings</button>' + (i.url ? ` <a href="${i.url}" target="_blank" rel="noopener"><button>Get a key</button></a>` : "") : i.url ? `<a href="${i.url}" target="_blank" rel="noopener"><button>Download</button></a>` : ""}</div></div>`).join("")).join("") +
+      (r.required_ok ? "" : '<p class="error">Something the app needs is missing; see above.</p>');
+    $("setupList").querySelectorAll("[data-act]").forEach((b) => b.onclick = () => {
+      $("setupDlg").close();
+      if (b.dataset.act === "settings") $("settingsBtn").click();
+      else { document.querySelector('[data-tab="scope"]').click(); setTimeout(() => $("scopeInstall").click(), 600); }
+    });
+  } catch (e) { $("setupList").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+}
+$("setupBtn").onclick = openSetup;
+$("setupRecheck").onclick = async () => { await loadConfig(); openSetup(); };
+$("setupDone").onclick = async () => { await api("/api/setup/done", {}); cfg.setup_done = true; $("setupDlg").close(); };
+
+// ---------------- network tab
+let netTimer = null, netHist = [], netBle = null;
+function netStart() { if (!netTimer) { netPoll(); netTimer = setInterval(netPoll, 2000); } }
+function netStop() { clearInterval(netTimer); netTimer = null; }
+const yes = (b, t, f) => b ? `<span class="ok">${t}</span>` : `<span class="muted">${f}</span>`;
+async function netPoll() {
+  let s; try { s = await api("/api/net/live"); } catch (e) { $("netBadge").textContent = "App not responding"; return; }
+  const d = s.dwarf;
+  netHist.push(d.reachable ? d.rtt_ms : null); if (netHist.length > 60) netHist.shift();
+  const type = !d.ip ? "No DWARF address yet" : !d.reachable ? "DWARF offline / not reachable" : d.ip === "192.168.88.1" ? "Direct: DWARF hotspot" : "Wi-Fi (STA mode)";
+  $("netBadge").innerHTML = `<b>${esc(type)}</b>`; $("netBadge").style.background = d.reachable ? "var(--accent2)" : "";
+  $("netUpdated").textContent = "Updated " + new Date(s.time * 1000).toLocaleTimeString();
+  $("netNow").innerHTML = [
+    ["DWARF address", d.ip ? esc(d.ip) : '<span class="muted">none: click Find my DWARF</span>'],
+    ["Status", d.ip ? yes(d.reachable, "Online", "Not answering") : "&ndash;"],
+    ["Connection type", d.route ? esc(d.route) : "&ndash;"],
+    ["Round trip", d.rtt_ms != null ? d.rtt_ms + " ms" : "&ndash;"],
+    ["Control port (9900)", d.reachable ? yes(d.control_port, "Open", "Closed") : "&ndash;"],
+    ["App control link", d.link && d.link.connected ? `<span class="ok">Connected</span> (heard ${d.link.seconds_since_heard}s ago)` : '<span class="muted">Not connected</span>'],
+    ["Bluetooth", netBle ? esc(netBle) : '<span class="muted">Not checked</span>'],
+    ["USB-C drive", s.usb.length ? `<span class="ok">Connected</span> ${esc(s.usb[0])}` : '<span class="muted">Not connected</span>'],
+  ].map(([k, v]) => `<tr><td class="muted">${k}</td><td>${v}</td></tr>`).join("");
+  const vals = netHist.filter((v) => v != null), max = Math.max(20, ...vals) * 1.15;
+  let path = "", pen = false;
+  netHist.forEach((v, i) => { const x = (i / 59) * 300; if (v == null) { pen = false; return; } const y = 68 - (v / max) * 64; path += (pen ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1); pen = true; });
+  $("netSpark").innerHTML = `<path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/>` +
+    netHist.map((v, i) => v == null ? `<rect x="${(i / 59) * 300 - 1}" y="0" width="2" height="70" fill="#c0392b" opacity=".45"/>` : "").join("");
+  const lost = netHist.filter((v) => v == null).length;
+  $("netStats").textContent = vals.length ? `Average ${(vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1)} ms, worst ${Math.max(...vals).toFixed(1)} ms, ${lost} of ${netHist.length} checks missed (${Math.round(100 * (netHist.length - lost) / netHist.length)}% up).` : (d.ip ? `No answer in the last ${netHist.length} checks.` : "");
+  $("netLaptop").innerHTML = s.laptop.map((a) => { const w = a.kind === "wifi" ? (s.wifi.interfaces || []).find((i) => i.ssid) : null;
+    return `<tr><td class="muted">${esc(a.adapter)}</td><td>${yes(a.up, a.kind === "wifi" ? "Wi-Fi" : a.kind === "wired" ? "Wired" : esc(a.kind), "Off / disconnected")} ${a.ip ? esc(a.ip) : ""}${w ? ` &middot; ${esc(w.ssid)} &middot; signal ${w.signal_pct ?? "?"}% &middot; ${w.rx_mbps ?? "?"}/${w.tx_mbps ?? "?"} Mbps${w.channel ? " &middot; ch " + esc(w.channel) : ""}` : ""}</td></tr>`; }).join("") || '<tr><td class="muted">No network connections found.</td></tr>';
+  const hs = (s.wifi.hotspots || []);
+  $("netHotspots").innerHTML = !s.wifi.supported ? "Hotspot search works on Windows." :
+    !s.laptop.some((a) => a.kind === "wifi") && !hs.length ? '<span class="warn">No Wi-Fi adapter found (or it\'s switched off), so the DWARF\'s hotspot can\'t be seen.</span>' :
+    hs.length ? hs.map((h) => `<div class="row" style="margin:3px 0"><span>${esc(h.ssid)} &middot; signal ${h.signal_pct}%</span><button data-ssid="${esc(h.ssid)}">Join</button></div>`).join("") : "No DWARF hotspot in range.";
+  $("netHotspots").querySelectorAll("[data-ssid]").forEach((b) => b.onclick = () => joinHotspot(b.dataset.ssid));
+  $("netUsb").textContent = s.usb.length ? "The DWARF's drive is connected: use From DWARF → USB-C to import sessions. (USB-C carries files only, not control.)" : "Plug the DWARF in with a data USB-C cable to import sessions as a drive. USB-C carries files only, not control.";
+}
+async function runJob(path, body, statusEl, label) {
+  statusEl.innerHTML = `<span class="spinner"></span> ${label}&hellip;`;
+  const { job_id } = await api(path, body);
+  for (;;) { await new Promise((r) => setTimeout(r, 1000)); const j = await api("/api/job/" + job_id);
+    if (j.state === "running") continue; if (j.state !== "done") throw new Error(j.error || "Failed."); return j.output; }
+}
+async function netDiagnose(addresses) {
+  try {
+    const r = await runJob("/api/net/diagnose", { addresses: addresses || [] }, $("netFindStatus"), "Testing every connection to the DWARF (about 15 seconds each)");
+    cfg = await api("/api/config", {}); showDwarfAddr && showDwarfAddr();
+    $("netFindStatus").innerHTML = r.best ? `<span class="ok">Using ${esc(r.best)}</span>${r.switched ? " (switched to the steadier connection)" : ""}.` : '<span class="error">The DWARF didn\'t answer on any connection.</span>';
+    $("netRoutes").innerHTML = r.routes.length ? `<table class="ovtable"><tr><th>Address</th><th>Route</th><th>Grade</th><th>Round trip</th><th>Jitter</th><th>Dropped</th><th>Response</th><th>Download</th></tr>` +
+      r.routes.map((x) => `<tr${x.ip === r.best ? ' style="font-weight:600"' : ""}><td>${esc(x.ip)}</td><td>${esc(x.route)}</td><td>${esc(x.grade)}</td><td>${x.rtt_ms ?? "–"} ms</td><td>${x.jitter_ms ?? "–"} ms</td><td>${x.loss_pct}%</td><td>${x.api_ms ?? "–"} ms</td><td>${x.download_mbps != null ? x.download_mbps + " Mbps" : "–"}</td></tr>`).join("") + "</table>" +
+      (r.routes.length < 2 ? `<p class="caption">${esc(r.single_radio_note)}</p>` : "") : "";
+  } catch (e) { $("netFindStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+}
+$("netTest").onclick = () => netDiagnose();
+$("netFind").onclick = async () => { const d = await findDwarf($("netFindStatus")); if (d) netDiagnose(d.addresses || [d.ip]); };
+async function joinHotspot(ssid) {
+  if (!confirm(`Join ${ssid}? The laptop's Wi-Fi moves onto the DWARF until you click "Back to my Wi-Fi" (a wired connection keeps working).`)) return;
+  try { const r = await runJob("/api/net/join_hotspot", { ssid, password: $("hotspotPw").value }, $("netFindStatus"), `Joining ${esc(ssid)}`);
+    $("hotspotPw").value = ""; cfg = await api("/api/config", {}); $("netFindStatus").innerHTML = `<span class="ok">On ${esc(r.joined)}</span>; the DWARF is at ${esc(r.ip)}.`; netHist = []; }
+  catch (e) { $("netFindStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+}
+$("netRejoin").onclick = async () => { try { const r = await api("/api/net/rejoin", {}); $("netFindStatus").textContent = `Reconnecting to ${r.rejoined}…`; netHist = []; } catch (e) { $("netFindStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; } };
+
+// Bluetooth: the DWARF's setup channel (same messages as the DWARFLAB app and Dwarfium).
+const BLE_SERVICES = ["0000daf2-0000-1000-8000-00805f9b34fb", "0000daf3-0000-1000-8000-00805f9b34fb", "0000daf4-0000-1000-8000-00805f9b34fb",
+  "0000daf5-0000-1000-8000-00805f9b34fb", "0000daf6-0000-1000-8000-00805f9b34fb", "000daf07-0000-1000-8000-00805f9b34fb"];
+const BLE_CHAR = "00009999-0000-1000-8000-00805f9b34fb";
+function pbVarint(n) { const o = []; n = n >>> 0; while (n > 127) { o.push((n & 127) | 128); n >>>= 7; } o.push(n); return o; }
+function pbInt(f, v) { return [f << 3, ...pbVarint(v)]; }
+function pbStr(f, s) { const b = new TextEncoder().encode(s); return [(f << 3) | 2, ...pbVarint(b.length), ...b]; }
+function pbParse(buf) {
+  const out = {}; let i = 0;
+  while (i < buf.length) {
+    let key = 0, sh = 0, b; do { b = buf[i++]; key |= (b & 127) << sh; sh += 7; } while (b & 128);
+    const f = key >>> 3, w = key & 7;
+    if (w === 0) { let v = 0, s = 0; do { b = buf[i++]; if (s < 32) v |= (b & 127) << s; s += 7; } while (b & 128); out[f] = v | 0; }
+    else if (w === 2) { let n = 0, s = 0; do { b = buf[i++]; n |= (b & 127) << s; s += 7; } while (b & 128); out[f] = new TextDecoder().decode(buf.slice(i, i + n)); i += n; }
+    else break;
+  }
+  return out;
+}
+function bleFrame(cmd, payload) {
+  const f = [0xaa, 0x01, cmd, 0x00, 0x01, 0x00, 0x00, (payload.length >> 8) & 255, payload.length & 255, ...payload];
+  let crc = 0xffff; for (const x of f) { crc ^= x; for (let j = 0; j < 8; j++) crc = crc & 1 ? (crc >> 1) ^ 0xa001 : crc >> 1; }
+  return new Uint8Array([...f, (crc >> 8) & 255, crc & 255, 0x0d]);
+}
+let bleChar = null, bleBuf = [], bleWaiter = null, bleConfig = null, blePsd = "DWARF_12345678";
+function bleOnData(e) {
+  bleBuf.push(...new Uint8Array(e.target.value.buffer));
+  const s = bleBuf.indexOf(0xaa); if (s > 0) bleBuf = bleBuf.slice(s);
+  if (bleBuf.length < 9) return;
+  const len = bleBuf[7] * 256 + bleBuf[8]; if (bleBuf.length < 9 + len + 3) return;
+  const msg = { cmd: bleBuf[2], fields: pbParse(bleBuf.slice(9, 9 + len)) }; bleBuf = [];
+  if (bleWaiter) { const w = bleWaiter; bleWaiter = null; w(msg); }
+}
+function bleRequest(cmd, payload) {
+  return new Promise((resolve, reject) => { const t = setTimeout(() => { bleWaiter = null; reject(new Error("The DWARF didn't answer over Bluetooth.")); }, 12000);
+    bleWaiter = (m) => { clearTimeout(t); resolve(m); }; bleChar.writeValue(bleFrame(cmd, payload)).catch(reject); });
+}
+$("bleFind").onclick = async () => {
+  if (!navigator.bluetooth) { $("bleStatus").innerHTML = '<span class="error">This browser has no Bluetooth access. Open the app in Chrome or Edge.</span>'; return; }
+  try {
+    $("bleStatus").innerHTML = '<span class="spinner"></span> Pick your DWARF in the browser\'s list&hellip;';
+    const dev = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: "DWARF" }], optionalServices: BLE_SERVICES });
+    $("bleStatus").innerHTML = `<span class="spinner"></span> Connecting to ${esc(dev.name)}&hellip;`;
+    const server = await dev.gatt.connect();
+    bleChar = null;
+    for (const svc of await server.getPrimaryServices()) { try { bleChar = await svc.getCharacteristic(BLE_CHAR); break; } catch (e) {} }
+    if (!bleChar) throw new Error("That device doesn't offer the DWARF's setup channel.");
+    bleChar.addEventListener("characteristicvaluechanged", bleOnData); await bleChar.startNotifications();
+    blePsd = $("hotspotPw").value || "DWARF_12345678";
+    const r = await bleRequest(1, [...pbInt(1, 1), ...pbStr(2, blePsd)]);
+    const f = r.fields; if (f[2]) throw new Error(`The DWARF refused (code ${f[2]}). If you changed its Bluetooth password, type it in the password box above.`);
+    bleConfig = { state: f[3] || 0, mode: f[4] || 0, ssid: f[8] || "", ip: f[10] || "" , psd: f[9] || "" };
+    const hotspot = bleConfig.ip === "192.168.88.1" || /^DWARF/i.test(bleConfig.ssid);
+    netBle = `${dev.name} found` + (hotspot ? " (in hotspot mode)" : bleConfig.ssid ? ` (on Wi-Fi "${bleConfig.ssid}"${bleConfig.ip ? " at " + bleConfig.ip : ", no address yet"})` : " (Wi-Fi not set up)");
+    $("bleStatus").innerHTML = `<span class="ok">${esc(netBle)}</span>` + (bleConfig.ip ? " Testing that address&hellip;" : "");
+    $("bleRejoin").classList.toggle("hidden", !(bleConfig.ssid && bleConfig.psd && !hotspot));
+    if (bleConfig.ip) netDiagnose([bleConfig.ip]);
+  } catch (e) { $("bleStatus").innerHTML = `<span class="error">${esc(e.message || String(e))}</span>`; }
+};
+$("bleRejoin").onclick = async () => {
+  if (!bleChar || !bleConfig) return;
+  try {
+    $("bleStatus").innerHTML = `<span class="spinner"></span> Asking the DWARF to rejoin "${esc(bleConfig.ssid)}"&hellip;`;
+    const r = await bleRequest(3, [...pbInt(1, 3), ...pbInt(2, 0), ...pbStr(3, blePsd), ...pbStr(4, bleConfig.ssid), ...pbStr(5, bleConfig.psd)]);
+    if (r.fields[2]) throw new Error(`The DWARF couldn't join (code ${r.fields[2]}). Check the Wi-Fi in the DWARFLAB app.`);
+    const ip = r.fields[5] || "";
+    netBle = `Rejoined "${bleConfig.ssid}"` + (ip ? ` at ${ip}` : "");
+    $("bleStatus").innerHTML = `<span class="ok">${esc(netBle)}</span>`;
+    if (ip) netDiagnose([ip]);
+  } catch (e) { $("bleStatus").innerHTML = `<span class="error">${esc(e.message || String(e))}</span>`; }
+};
+
+// ---------------- plan & control
+const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const hms = (h, sign) => { const neg = h < 0; h = Math.abs(h); const a = Math.floor(h), b = Math.floor((h - a) * 60), c = Math.round(((h - a) * 60 - b) * 60);
+  return (sign ? (neg ? "-" : "+") : "") + String(a).padStart(2, "0") + ":" + String(b).padStart(2, "0") + ":" + String(Math.min(c, 59)).padStart(2, "0"); };
+let plan = null, camOpts = null, joySpeed = 0.4, presets = null;
+function openControl() {
+  if (!$("planDate").value) { const d = new Date(); if (d.getHours() < 9) d.setDate(d.getDate() - 1); $("planDate").value = d.toLocaleDateString("en-CA"); }
+  $("planSite").textContent = cfg.site_lat !== "" && cfg.site_lon !== "" ? `${cfg.site_name || "Site"}: ${cfg.site_lat}, ${cfg.site_lon}` : "Set your site in Settings";
+  ctlRefresh();
+  if (!plan && cfg.site_lat !== "") $("planBtn").click();
+  if (!$("camExp").options.length) fillCamera(null);
+  $("mountSel").value = cfg.mount || "altaz"; $("learnOn").checked = cfg.learn_enabled !== false; $("autoApply").checked = cfg.auto_apply !== false;
+  if (!presets) loadPresets();
+  learnSummary();
+}
+$("planBtn").onclick = async () => {
+  const date = $("planDate").value;
+  if (!date) return;
+  const off = -new Date(date + "T21:00:00").getTimezoneOffset();
+  $("planSummary").innerHTML = '<span class="spinner"></span> Working out the night&hellip;'; $("planList").innerHTML = ""; $("planSchedule").innerHTML = "";
+  try { plan = await api(`/api/plan?date=${date}&offset=${off}&mount=${cfg.mount || "altaz"}`); } catch (e) { $("planSummary").innerHTML = `<span class="error">${esc(e.message)}</span>`; return; }
+  if (!plan.dark) { $("planSummary").textContent = plan.note; return; }
+  $("planSummary").innerHTML = `Dark (${esc(plan.dark.kind)}) ${fmtTime(plan.dark.start)} to ${fmtTime(plan.dark.end)}. Moon ${plan.moon.illumination}% lit, up ${plan.moon.up_hours} h of the dark time.` +
+    (plan.moon.illumination > 60 ? " Bright Moon: emission nebulae with the Duo-band filter are the best bet." : plan.moon.illumination < 25 ? " Dark sky: a good night for galaxies." : "");
+  const t0 = new Date(plan.dark.start), span = new Date(plan.dark.end) - t0;
+  $("planSchedule").innerHTML = `<div class="caption" style="margin-top:8px">Suggested night</div><div class="timeline">` +
+    plan.schedule.map((s) => `<div style="flex:${(new Date(s.end) - new Date(s.start)) / span}" title="${esc(s.name)} ${fmtTime(s.start)} to ${fmtTime(s.end)}">${esc(s.name)}</div>`).join("") + "</div>" +
+    plan.schedule.map((s) => `<div class="caption">${fmtTime(s.start)} to ${fmtTime(s.end)}: ${esc(s.name)}</div>`).join("");
+  $("planList").innerHTML = plan.targets.map((t, i) => { const pr = plan.presets[t.preset];
+    return `<div class="tcard"><div class="row" style="justify-content:space-between"><span class="t">${i + 1}. ${esc(t.name)}</span><span class="caption">${esc(t.kind)}</span></div>
+      <div class="caption">Best ${fmtTime(t.window_start)} to ${fmtTime(t.window_end)} &middot; highest ${t.peak_alt}&deg; in the ${t.peak_dir} around ${fmtTime(t.peak_time)}${t.moon_sep != null ? ` &middot; Moon ${t.moon_sep}&deg; away` : ""} &middot; about ${t.size_arcmin}' across</div>
+      <div style="margin:4px 0">${pr.learned ? '<span class="chip" title="Adjusted from your own sessions">learned</span>' : ""}<span class="chip">${esc(pr.filter_name)}</span><span class="chip">${pr.exposure} s</span><span class="chip">gain ${pr.gain}</span><span class="chip">${t.frames} frames</span></div>
+      <div class="row"><button class="primary" data-goto="${i}">Go to</button><button data-preset="${i}">Use these settings</button><button data-copy="${i}" title="Copy the name and coordinates to paste into Dwarfium">Copy coordinates</button><span class="caption">RA ${hms(t.ra_hours)} Dec ${hms(t.dec, true)}</span></div></div>`; }).join("");
+  $("planList").querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => gotoTarget(plan.targets[+b.dataset.goto]));
+  $("planList").querySelectorAll("[data-preset]").forEach((b) => b.onclick = () => { const t = plan.targets[+b.dataset.preset]; usePreset(t.preset, t.frames, t); });
+  $("planList").querySelectorAll("[data-copy]").forEach((b) => b.onclick = async () => { const t = plan.targets[+b.dataset.copy];
+    const txt = `${t.name}  RA ${hms(t.ra_hours)}  Dec ${hms(t.dec, true)}`;
+    try { await navigator.clipboard.writeText(txt); b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy coordinates", 1500); } catch (e) { prompt("Copy this:", txt); } });
+};
+async function ctlRefresh() {
+  try {
+    const s = await api("/api/control/status");
+    $("ctlStatus").innerHTML = s.connected ? `<span class="ok">Connected</span> to ${esc(s.ip)}` : cfg.dwarf_ip ? `Not connected (DWARF at ${esc(cfg.dwarf_ip)})` : "Not connected. Click Find my DWARF first.";
+    if (s.connected && s.goto && s.goto.at) $("gotoStatus").textContent = s.goto.done ? (s.goto.code === 0 ? "Goto finished; the DWARF is tracking." : `Goto ended with code ${s.goto.code}.`) : `Goto in progress (step ${s.goto.step})…`;
+    return s;
+  } catch (e) { $("ctlStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+}
+setInterval(() => { if (!$("controlTab").classList.contains("hidden")) ctlRefresh(); }, 3000);
+$("ctlFind").onclick = () => findDwarf($("ctlStatus"));
+$("ctlConnect").onclick = async () => {
+  $("ctlStatus").innerHTML = '<span class="spinner"></span> Connecting&hellip;';
+  try {
+    const r = await api("/api/control/connect", {});
+    $("ctlStatus").innerHTML = `<span class="ok">Connected</span> to ${esc(r.name || r.ip)}` + (r.control ? "" : ` <span class="warn">(another app may be holding control; close the DWARFLAB phone app)</span>`);
+    fillCamera(true);
+  } catch (e) { $("ctlStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+};
+$("ctlDisconnect").onclick = async () => { joyRelease(); await api("/api/control/disconnect", {}).catch(() => {}); ctlRefresh(); };
+async function gotoTarget(t) {
+  if (!confirm(`Point the DWARF at ${t.name}? It calibrates first if it needs to, then slews and starts tracking.`)) return;
+  $("gotoStatus").innerHTML = '<span class="spinner"></span> Sending goto&hellip;';
+  try {
+    const s = await ctlRefresh();
+    if (!s || !s.connected) await api("/api/control/connect", {});
+    await api("/api/control/goto", { ra_hours: t.ra_hours, dec: t.dec, name: t.name.slice(0, 40) });
+    $("gotoStatus").textContent = `Going to ${t.name}…`;
+    if (cfg.auto_apply !== false) usePreset(t.preset, t.frames, t); else capTarget = { name: t.name, kind: t.preset };
+  } catch (e) { $("gotoStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+}
+
+// camera settings
+const DEFAULT_EXPOSURES = [1, 2, 4, 5, 8, 10, 13, 15, 30, 45, 60, 90, 120], DEFAULT_GAINS = [40, 50, 60, 70, 80, 90, 100, 110, 120, 140, 160, 180, 200, 240];
+async function fillCamera(fromScope) {
+  let exps = DEFAULT_EXPOSURES, gains = DEFAULT_GAINS;
+  if (fromScope) {
+    try { camOpts = await api("/api/control/camera?camera=0"); exps = camOpts.exposures.map((e) => e.seconds); if (camOpts.gains.length) gains = camOpts.gains; $("camNote").textContent = "Choices read from your DWARF."; }
+    catch (e) { $("camNote").textContent = "Using standard DWARF 3 choices (" + e.message + ")"; }
+  }
+  const keepE = $("camExp").value, keepG = $("camGain").value;
+  $("camExp").innerHTML = exps.map((s) => `<option value="${s}">${s} s</option>`).join("");
+  $("camGain").innerHTML = gains.map((g) => `<option value="${g}">${g}</option>`).join("");
+  if (keepE) $("camExp").value = keepE; else $("camExp").value = 15;
+  if (keepG) $("camGain").value = keepG; else $("camGain").value = 60;
+}
+let capTarget = null;
+async function loadPresets() { try { presets = await api("/api/presets"); drawPresets(presets); } catch (e) {} }
+async function learnSummary() {
+  try { const s = await api("/api/learn/summary");
+    $("learnSummary").textContent = $("learnOn").checked ? `Learning from ${s.sessions_measured} measured session${s.sessions_measured === 1 ? "" : "s"} and ${s.captures_logged} logged capture${s.captures_logged === 1 ? "" : "s"}. Starting point: DWARFLAB's DWARF 3 manual and community guides; your own results take over once there are two for a kind of target.` : "Calibrate & learn is off: recommendations use the published DWARF 3 settings only.";
+  } catch (e) {}
+}
+async function saveCtlPrefs() {
+  cfg = { ...cfg, ...(await api("/api/config", { mount: $("mountSel").value, learn_enabled: $("learnOn").checked, auto_apply: $("autoApply").checked })) };
+  await loadPresets(); learnSummary();
+  if (plan && plan.mount !== cfg.mount) $("planBtn").click();
+}
+$("mountSel").onchange = saveCtlPrefs; $("learnOn").onchange = saveCtlPrefs; $("autoApply").onchange = saveCtlPrefs;
+function drawPresets(presets) {
+  $("presetBtns").innerHTML = '<span class="caption">Recommended:</span>' + Object.entries(presets).map(([k, p]) => `<button data-p="${k}" title="${esc(p.reasons.join(" "))}">${esc(p.label)}${p.learned ? " *" : ""}</button>`).join("");
+  $("presetBtns").querySelectorAll("button").forEach((b) => b.onclick = () => usePreset(b.dataset.p));
+}
+function usePreset(key, frames, target) {
+  const p = ((plan && plan.mount === cfg.mount && plan.presets) || presets || {})[key]; if (!p) return;
+  $("camFilter").value = p.filter; $("camExp").value = p.exposure; $("camGain").value = p.gain; $("camFrames").value = frames || p.frames;
+  capTarget = target ? { name: target.name, kind: key } : { name: "", kind: key };
+  $("camNote").innerHTML = `<b>${esc(p.label)}${p.learned ? " (learned from your sessions)" : ""}:</b> ` + p.reasons.map(esc).join(" ");
+}
+$("capStart").onclick = async () => {
+  const body = { filter: +$("camFilter").value, exposure: +$("camExp").value, gain: +$("camGain").value, frames: +$("camFrames").value,
+    target: capTarget ? capTarget.name : "", kind: capTarget ? capTarget.kind : "", conditions: plan && plan.moon ? { moon_illumination: plan.moon.illumination, date: plan.date } : {} };
+  $("capStatus").innerHTML = '<span class="spinner"></span> Setting up the camera&hellip;';
+  try { await api("/api/control/capture_start", body); $("capStatus").innerHTML = `<span class="ok">Capturing</span> ${body.frames} &times; ${body.exposure} s at gain ${body.gain}.`; }
+  catch (e) { $("capStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+};
+$("capStop").onclick = async () => { try { await api("/api/control/capture_stop", {}); $("capStatus").textContent = "Capture stopped; the stack so far is kept."; } catch (e) { $("capStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; } };
+
+// live view + zoom
+let liveCam = "tele", zoom = { s: 1, x: 0, y: 0 };
+function setZoom() { $("liveImg").style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})`; }
+$("camTele").onclick = () => { liveCam = "tele"; $("camTele").classList.add("on"); $("camWide").classList.remove("on"); if (!$("liveImg").classList.contains("hidden")) $("liveStart").click(); };
+$("camWide").onclick = () => { liveCam = "wide"; $("camWide").classList.add("on"); $("camTele").classList.remove("on"); if (!$("liveImg").classList.contains("hidden")) $("liveStart").click(); };
+$("liveStart").onclick = () => {
+  $("liveMsg").textContent = "Connecting to the live stream…"; $("liveMsg").classList.remove("hidden");
+  $("liveImg").onload = () => { $("liveMsg").classList.add("hidden"); $("liveImg").classList.remove("hidden"); };
+  $("liveImg").onerror = () => { $("liveImg").classList.add("hidden"); $("liveMsg").classList.remove("hidden"); $("liveMsg").textContent = "No live picture. Make sure the DWARF is on and its camera is open (opening the Camera page in Dwarfium once does this), then try again."; };
+  $("liveImg").src = `/api/live.mjpg?camera=${liveCam}&t=${TOKEN}&n=${Date.now()}`;
+};
+$("liveStop").onclick = () => { $("liveImg").src = ""; $("liveImg").classList.add("hidden"); $("liveMsg").classList.remove("hidden"); $("liveMsg").textContent = "Live view is off."; };
+$("liveBox").addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const r = $("liveBox").getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const ns = Math.min(8, Math.max(1, zoom.s * Math.pow(1.0015, -e.deltaY)));
+  zoom.x = mx - (mx - zoom.x) * ns / zoom.s; zoom.y = my - (my - zoom.y) * ns / zoom.s; zoom.s = ns;
+  if (ns === 1) zoom.x = zoom.y = 0;
+  zoom.x = Math.min(0, Math.max(r.width - r.width * ns, zoom.x)); zoom.y = Math.min(0, Math.max(r.height - r.height * ns, zoom.y));
+  setZoom();
+}, { passive: false });
+$("liveBox").ondblclick = () => { zoom = { s: 1, x: 0, y: 0 }; setZoom(); };
+
+// keyboard joystick: W/S tilt, A/D turn
+const held = new Set(); let joyTimer = null, joyMoving = false;
+$("joySpeed").oninput = () => { joySpeed = +$("joySpeed").value; $("joySpeedVal").textContent = Math.round(joySpeed * 100) + "%"; };
+$("joySpeed").oninput();
+function joyVector(fast) {
+  const x = (held.has("d") ? 1 : 0) - (held.has("a") ? 1 : 0), y = (held.has("s") ? 1 : 0) - (held.has("w") ? 1 : 0);
+  if (!x && !y) return null;
+  return { angle: ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360, length: fast ? 1 : joySpeed };
+}
+let joyFast = false;
+function joySend() {
+  const v = joyVector(joyFast);
+  document.querySelectorAll(".pad [data-dir]").forEach((b) => b.classList.toggle("on", held.has(b.dataset.dir)));
+  if (!v) { joyRelease(); return; }
+  joyMoving = true;
+  api("/api/control/joystick", v).catch((e) => { $("ctlStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; held.clear(); joyRelease(); });
+  clearTimeout(joyTimer); joyTimer = setTimeout(joySend, 400);
+}
+function joyRelease() {
+  clearTimeout(joyTimer); joyTimer = null;
+  document.querySelectorAll(".pad [data-dir]").forEach((b) => b.classList.remove("on"));
+  if (joyMoving) { joyMoving = false; api("/api/control/joystick_stop", {}).catch(() => {}); }
+}
+document.addEventListener("keydown", (e) => {
+  if ($("controlTab").classList.contains("hidden") || /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) || document.querySelector("dialog[open]")) return;
+  const k = e.key.toLowerCase();
+  if (!"wasd".includes(k) || k.length !== 1) return;
+  e.preventDefault(); joyFast = e.shiftKey;
+  if (!held.has(k)) { held.add(k); joySend(); }
+});
+document.addEventListener("keyup", (e) => { const k = e.key.toLowerCase(); if (held.delete(k)) { if (held.size) joySend(); else joyRelease(); } });
+window.addEventListener("blur", () => { held.clear(); joyRelease(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { held.clear(); joyRelease(); } });
+document.querySelectorAll(".pad [data-dir]").forEach((b) => {
+  const down = (e) => { e.preventDefault(); held.add(b.dataset.dir); joySend(); };
+  const up = () => { if (held.delete(b.dataset.dir)) { if (held.size) joySend(); else joyRelease(); } };
+  b.addEventListener("pointerdown", down); b.addEventListener("pointerup", up); b.addEventListener("pointerleave", up);
+});
+$("padStop").onclick = () => { held.clear(); joyMoving = true; joyRelease(); };
+
+// ---------------- projects
+let projCurrent = null;
+async function loadProjects() {
+  const r = await api("/api/projects");
+  $("projRoot").textContent = "Folders are created in " + r.root;
+  $("projList").innerHTML = r.projects.map((p) => `<li data-id="${p.id}" style="padding:6px;border-bottom:1px solid var(--line);cursor:pointer${projCurrent === p.id ? ";color:var(--accent)" : ""}">${esc(p.name)} <span class="muted">${p.photos} photo${p.photos === 1 ? "" : "s"}</span></li>`).join("") || '<li class="muted">No projects yet.</li>';
+  $("projList").querySelectorAll("li[data-id]").forEach((li) => li.onclick = () => showProject(+li.dataset.id));
+  return r.projects;
+}
+$("projCreate").onclick = async () => {
+  const name = $("projName").value.trim(); if (!name) return;
+  try { const p = await api("/api/projects/create", { name }); $("projName").value = ""; await loadProjects(); showProject(p.id); } catch (e) { alert(e.message); }
+};
+function ovRows(o) {
+  const site = o.site ? `${o.site.name ? esc(o.site.name) + " " : ""}(${esc(o.site.lat)}, ${esc(o.site.lon)})` : '<span class="muted">add your site in Settings</span>';
+  const sky = o.ra != null ? ` &middot; sky RA ${hms(+o.ra)} Dec ${hms(+o.dec, true)}` : "";
+  const mins = (m) => m == null ? "?" : m >= 60 ? `${Math.floor(m / 60)} h ${Math.round(m % 60)} min` : `${m} min`;
+  return [["Location", site + sky], ["Date", o.date ? new Date(o.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "?"],
+    ["Size", (o.width ? `${o.width} &times; ${o.height} px` : "?") + (o.file_size_mb != null ? `, ${o.file_size_mb} MB` : "")],
+    ["Frames", o.frames_stacked != null ? `${o.frames_stacked} stacked` + (o.frames_taken ? ` of ${esc(o.frames_taken)} taken` : "") : "?"],
+    ["Settings", [o.exposure_s != null ? o.exposure_s + " s" : null, o.gain != null ? "gain " + esc(o.gain) : null, o.filter ? esc(o.filter) : null].filter(Boolean).join(", ") || "?"],
+    ["Time taken", mins(o.elapsed_min) + (o.elapsed_source ? ` <span class="caption">(${esc(o.elapsed_source)})</span>` : "")],
+    ["Integration", o.integration_min != null ? mins(o.integration_min) : "?"]].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+}
+async function showProject(id) {
+  projCurrent = id; loadProjects();
+  const p = await api("/api/project/" + id);
+  $("projDetail").innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(p.name)}</h2><button id="projOpen">Open folder</button></div>
+      <div class="caption">${esc(p.folder)}</div>
+      <label for="projNotes">Project notes</label><textarea id="projNotes" style="min-height:90px" placeholder="Plans, ideas, what to shoot next time&hellip;">${esc(p.notes || "")}</textarea><span id="projNotesStatus" class="caption"></span></div>` +
+    (p.photos.length ? p.photos.map((ph) => `<div class="card"><div class="grid2" style="grid-template-columns:240px 1fr">
+        <div>${ph.preview_b64 ? `<img src="data:image/jpeg;base64,${ph.preview_b64}" style="width:100%;border-radius:6px">` : '<div class="muted">No preview</div>'}
+          <div class="row" style="margin-top:6px"><button data-assess="${esc(ph.file)}">Open in Assess</button><button data-remove="${ph.id}" title="Takes it off this list; the file stays in the folder">Remove</button></div></div>
+        <div><input data-title="${ph.id}" value="${esc(ph.title || "")}" style="font-weight:600">
+          <table class="ovtable" style="margin:6px 0">${ovRows(ph.overview || {})}</table>
+          ${ph.exists ? "" : '<div class="error">The file is no longer in the project folder.</div>'}
+          <textarea data-notes="${ph.id}" placeholder="Notes on this photo: processing, what worked, what to change">${esc(ph.notes || "")}</textarea></div></div></div>`).join("")
+      : '<div class="card muted">No photos yet. Open a finished photo on the Assess tab and click <b>Add to project</b>.</div>');
+  $("projOpen").onclick = () => api("/api/project/open", { id }).catch((e) => alert(e.message));
+  let t = null;
+  $("projNotes").oninput = () => { clearTimeout(t); $("projNotesStatus").textContent = "…"; t = setTimeout(async () => { await api("/api/project/notes", { id, notes: $("projNotes").value }); $("projNotesStatus").textContent = "Saved"; }, 700); };
+  $("projDetail").querySelectorAll("[data-title]").forEach((el) => el.onchange = () => api("/api/project/photo", { photo_id: +el.dataset.title, title: el.value }));
+  $("projDetail").querySelectorAll("[data-notes]").forEach((el) => { let tt = null; el.oninput = () => { clearTimeout(tt); tt = setTimeout(() => api("/api/project/photo", { photo_id: +el.dataset.notes, notes: el.value }), 700); }; });
+  $("projDetail").querySelectorAll("[data-remove]").forEach((b) => b.onclick = async () => { if (confirm("Take this photo off the project? The file stays in the folder.")) { await api("/api/project/photo/remove", { photo_id: +b.dataset.remove }); showProject(id); } });
+  $("projDetail").querySelectorAll("[data-assess]").forEach((b) => b.onclick = () => { document.querySelector('[data-tab="work"]').click(); analyze(b.dataset.assess); });
+}
+$("addToProject").onclick = async () => {
+  if (!current) return;
+  const list = await loadProjects();
+  let pid;
+  if (!list.length) {
+    const name = prompt("Name the new project for this photo:", (current.shot_info && current.shot_info.target) || "");
+    if (!name) return;
+    pid = (await api("/api/projects/create", { name })).id;
+  } else {
+    const n = prompt("Add to which project? Type its number, or a new name:\n" + list.map((p, i) => `${i + 1}: ${p.name}`).join("\n"), "1");
+    if (!n) return;
+    pid = /^\d+$/.test(n.trim()) && list[+n - 1] ? list[+n - 1].id : (await api("/api/projects/create", { name: n.trim() })).id;
+  }
+  try {
+    await api("/api/project/add", { id: pid, file: current.path, preview_b64: current.overview_jpeg_b64 });
+    document.querySelector('[data-tab="projects"]').click(); showProject(pid);
+  } catch (e) { alert(e.message); }
+};
+
 // ---------------- from DWARF
 let dwVia = "wifi";
 function setVia(v) { dwVia = v; $("viaWifi").classList.toggle("on", v === "wifi"); $("viaUsb").classList.toggle("on", v === "usb"); $("dwFind").classList.toggle("hidden", v === "usb"); }
@@ -772,7 +1339,7 @@ async function showDwarfSession(sess) {
   } catch (e) { $("dwDetail").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
 }
 
-loadConfig().then(() => { browse(""); checkUpdates(false); });
+loadConfig().then(() => { browse(""); checkUpdates(false); if (!cfg.setup_done) openSetup(); });
 </script>
 </body>
 </html>

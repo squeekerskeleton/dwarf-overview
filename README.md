@@ -4,7 +4,7 @@ A small app for your laptop that looks at a DWARF 3 image, measures what needs f
 
 ## Set up on Windows (once)
 
-1. **Python.** Install Python 3.11 or newer from https://www.python.org/downloads/. On the first installer screen, tick **"Add python.exe to PATH"**.
+1. **Python.** Install Python 3.10 or newer from https://www.python.org/downloads/. On the first installer screen, tick **"Add python.exe to PATH"**.
 2. **GraXpert and Siril** (free). GraXpert: https://graxpert.com. Siril 1.2 or newer: https://siril.org. Use the default install locations and the app finds them on its own.
 3. **Anthropic API key.** Create one at https://console.anthropic.com (Settings → API Keys) and add a few dollars of credit. Each assessment costs roughly 10 to 15 cents.
 4. Unzip this folder somewhere permanent, such as `Documents\DWARF Overview`.
@@ -13,6 +13,8 @@ A small app for your laptop that looks at a DWARF 3 image, measures what needs f
 7. **ASTAP** (free, optional but recommended). It names the subject by matching the stars in your photo. Install it from https://www.hnsky.org/astap.htm, plus the **D50** star database from the same page. Use the default install location and the app finds it.
 
 Windows may warn about the `.bat` file the first time. Choose **More info → Run anyway**.
+
+**Setting up another PC?** The first time the app opens, a **Setup** page lists every program it uses, whether each is installed, and a **Download** button for each one's official site. Install them, then click **Check again**. You can reopen it anytime with the **Setup** button. Each time the Windows launcher runs, it does a quick software check first and stops only if Python or its libraries are missing.
 
 ## Using it
 
@@ -68,7 +70,7 @@ Every assessment also includes:
 
 **Over Wi-Fi:**
 1. In the DWARFLAB app, put the DWARF 3 on your Wi-Fi (STA mode), or join the telescope's own hotspot with your laptop.
-2. On the **From DWARF** tab, click **Find my DWARF**. The app searches only your local network (the subnet your laptop is on, plus the DWARF hotspot address 192.168.88.1), confirms the telescope by asking it for its device info, and saves its address. Nothing is sent outside your network.
+2. On the **From DWARF** tab, click **Find my DWARF**. The app checks every address on each local network your laptop is on (up to about 1,000 addresses per network), plus the devices your laptop has recently seen and the DWARF hotspot address 192.168.88.1. It doesn't just try the last-known address. It confirms the telescope by asking it for its device info, and saves its address. Nothing is sent outside your network.
 3. Click **Load sessions** and pick a session. The stacked files are pre-selected. Click **Copy to laptop and measure**.
 
 **Over USB-C:** plug the DWARF in and switch it on. It shows up as a drive, and the From DWARF tab switches to **USB-C** by itself. Load sessions and copy them the same way, with no Wi-Fi needed.
@@ -91,6 +93,64 @@ The **Telescope** tab gives you full control of the DWARF from the app: goto and
 5. For the first-time Bluetooth Wi-Fi setup, click **Open in its own window**, because Bluetooth doesn't work inside the tab.
 
 You can also install the Dwarfium **desktop app** from the [Windows installer on its release page](https://github.com/acocalypso/dwarfium/releases). Once it's installed, an **Open Dwarfium** button appears at the top of this app. The installer isn't code-signed, so SmartScreen will warn you. Click **More info → Run anyway**.
+
+## Plan & Control
+
+A simpler alternative to Dwarfium for a night out.
+
+- **Plan any night.** Pick a date. The site comes from your latitude and longitude in Settings. The app works out when it's properly dark and how bright the Moon is. It ranks about 85 DWARF-sized targets by how high they get and for how long, how far they are from the Moon, and how well they fit the DWARF's field of view. It also suggests an order for the night. Plans for future nights work the same way.
+- **Go to** points the DWARF at a target in one click. It calibrates first if it needs to, then tracks. **Copy coordinates** copies the name, RA and Dec to paste into Dwarfium or the DWARFLAB app.
+- **Camera settings.** Choose the filter, exposure, gain and frame count, or pick a recommended preset. Then click **Start capture**. When you're connected, the choices are read from your DWARF.
+- **Moving the telescope.** Click the live view, then hold **W**/**S** to tilt up or down and **A**/**D** to turn left or right. Hold **Shift** for full speed. Letting go stops the telescope, and so does losing contact. Scroll over the live view to zoom, and double-click to reset.
+- **Mount.** Choose Alt-Az for normal use or EQ for wedge mode. Alt-Az limits subs to 15 s, while EQ mode allows 30 to 60 s.
+
+Goto needs your site's latitude and longitude in Settings.
+
+## Network
+
+The **Network** tab shows live, every 2 seconds:
+- how the laptop reaches the DWARF: your Wi-Fi (STA mode), the DWARF's own hotspot, or not at all;
+- whether it's online, the round-trip time, and whether the control port is open;
+- whether the app's control link is up;
+- a 2-minute round-trip graph, with missed checks marked in red;
+- the laptop's own connections, wired and Wi-Fi, with Wi-Fi signal and link speed.
+
+**Test all connections** measures every address the DWARF answers on: round trip, jitter, dropped connections, response time and download speed from its file server. The steadiest one is saved as the DWARF's address. **Find my DWARF** runs this test automatically after it finds the telescope.
+
+If the DWARF isn't on your Wi-Fi, there are backup ways to reach it:
+- **The DWARF's hotspot.** On Windows, the tab lists any DWARF hotspots in range, and **Join** connects to one. Leave the password blank to use the factory default. **Back to my Wi-Fi** returns the laptop to the network it was on before. A wired connection keeps working the whole time.
+- **Bluetooth**, in Chrome or Edge. It shows which network the DWARF is on and its address, and can ask it to rejoin its saved Wi-Fi. These are the same setup messages the DWARFLAB app and Dwarfium use. Bluetooth can't carry control or pictures. Close the DWARFLAB phone app first, since only one device can connect at a time.
+- **USB-C.** The tab shows when the DWARF's drive is plugged in. USB-C carries files only.
+
+## Calibrate & learn
+
+Recommendations start from DWARFLAB's DWARF 3 manual and community guides:
+- 15–60 s subs, with EQ mode needed for 30 s and above.
+- Gain 60–80, with 40 as the minimum.
+- 200–400 frames.
+- Duo-band for emission and planetary nebulae, and Astro for galaxies, clusters and dusty nebulae.
+
+The guides are the DWARF 3 manual, the dwarfastro.com settings guide and New Forest Astro's filter guide.
+
+With **Calibrate & learn** on, every capture started from the app is logged with its target and conditions. Every deep-sky photo you measure records how the night went: frames kept versus taken, signal-to-noise, star size and roundness, and your star rating. Once there are two or more results for a kind of target, the settings that worked best for you are recommended instead, marked "learned". The reasons are shown under the camera settings. If your sessions keep losing frames, a shorter exposure is suggested.
+
+With **Auto-apply recommended settings** on, clicking **Go to** also fills in the camera settings for that target.
+
+## Projects
+
+The **Projects** tab keeps finished photos together. Each project is a real folder, by default in `Pictures\DWARF Projects`, and you can change that in Settings. Click **Add to project** on the Assess tab to copy a photo in. Each photo gets an overview built from the file and the DWARF's `shotsInfo.json`:
+- the site and sky coordinates;
+- the date;
+- the file size and pixel dimensions;
+- the frames stacked out of the frames taken;
+- exposure and gain;
+- the elapsed time from the first frame to the last.
+
+Projects and photos both have notes, which save as you type.
+
+## Themes
+
+Settings has 30 earth tones. Pick a primary colour for highlights and tabs, and a secondary colour for the main buttons.
 
 ## Stop all
 

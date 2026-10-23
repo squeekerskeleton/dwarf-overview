@@ -1,7 +1,8 @@
 """Find the DWARF on the local network, and stop everything it's doing.
 
-Finding: the laptop's own addresses are read locally, then only the private
-subnets it is on (plus the DWARF's own hotspot address) are probed. A DWARF is
+Finding: the laptop's own addresses and network sizes are read locally, then
+every address on those private networks (plus the DWARF's own hotspot address
+and any device in the laptop's ARP table) is probed. A DWARF is
 confirmed by asking it for its device info on port 8082, the same check
 Dwarfium makes. Nothing is sent outside the local network.
 
@@ -26,6 +27,7 @@ import string
 import struct
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -104,24 +106,78 @@ def device_info(ip: str, timeout: float = 3) -> dict | None:
             "name": str(data.get("deviceName") or MODELS[data["deviceId"]])}
 
 
+def _run(cmd: list[str]) -> str:
+    try:
+        kw = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=10, **kw).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def local_networks(mine: list[str]) -> list[ipaddress.IPv4Network]:
+    """The private networks the laptop is on, with their real size (a /24 when the mask can't be read).
+
+    Networks bigger than /22 (1,022 addresses) are searched as the /22 around the laptop, which
+    covers any home, phone-hotspot or DWARF-hotspot network.
+    """
+    masks: dict[str, int] = {}
+    if sys.platform == "win32":
+        # ipconfig lists "IPv4 Address ... : x" followed by "Subnet Mask ... : y" for each adapter.
+        for ip, mask in re.findall(r"IPv4[^:]*:\s*([\d.]+)[^\n]*\n[^:]*:\s*([\d.]+)", _run(["ipconfig"])):
+            try:
+                masks[ip] = ipaddress.ip_network(f"0.0.0.0/{mask}").prefixlen
+            except ValueError:
+                pass
+    else:
+        for ip, plen in re.findall(r"inet ([\d.]+)/(\d+)", _run(["ip", "-4", "addr"])):
+            masks[ip] = int(plen)
+        for ip, mask in re.findall(r"inet ([\d.]+) netmask (0x[0-9a-f]+)", _run(["ifconfig"])):
+            masks[ip] = bin(int(mask, 16)).count("1")
+    nets = []
+    for ip in mine:
+        plen = min(max(masks.get(ip, 24), 22), 30)
+        net = ipaddress.ip_network(f"{ip}/{plen}", strict=False)
+        if net not in nets:
+            nets.append(net)
+    return nets
+
+
+def _neighbours() -> list[str]:
+    """Devices the laptop has recently talked to (its ARP table), on any private network."""
+    out = _run(["arp", "-a"]) or _run(["ip", "neigh"])
+    return [ip for ip in dict.fromkeys(re.findall(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", out))
+            if _is_local(ip) and not ip.endswith(".255")]
+
+
 def scan() -> dict:
+    """Search every address on the laptop's local networks (and the DWARF's hotspot) for a DWARF.
+
+    Each address is checked for the DWARF's ports (8082 for device info, 9900 for control); anything
+    that answers is then asked whether it's a DWARF. Nothing leaves the local network.
+    """
     mine = local_addresses()
+    nets = local_networks(mine)
     candidates = [HOTSPOT_IP]
     saved = (config.load().get("dwarf_ip") or "").strip()
     if _is_local(saved):
         candidates.insert(0, saved)
-    subnets = []
-    for ip in mine:
-        net = ipaddress.ip_network(f"{ip}/24", strict=False)
-        if net not in subnets:
-            subnets.append(net)
-    for net in subnets[:4]:
-        candidates += [str(h) for h in net.hosts() if str(h) not in mine]
-    candidates = list(dict.fromkeys(candidates))
-    with ThreadPoolExecutor(max_workers=128) as pool:
-        open_hosts = [ip for ip, ok in zip(candidates, pool.map(lambda h: _port_open(h, 8082, 0.6), candidates)) if ok]
-        devices = [d for d in pool.map(device_info, open_hosts) if d]
-    return {"devices": devices, "searched": [str(n) for n in subnets[:4]] + [HOTSPOT_IP], "laptop": mine}
+    candidates += _neighbours()
+    for net in nets[:6]:
+        candidates += [str(h) for h in net.hosts()]
+    candidates = [c for c in dict.fromkeys(candidates) if c not in mine or c == saved]
+
+    def answers(host: str) -> bool:
+        return _port_open(host, 8082, 0.6) or _port_open(host, 9900, 0.4)
+
+    with ThreadPoolExecutor(max_workers=192) as pool:
+        open_hosts = [ip for ip, ok in zip(candidates, pool.map(answers, candidates)) if ok]
+        found = [d for d in pool.map(device_info, open_hosts) if d]
+    # The same DWARF can answer on more than one address (your Wi-Fi and its hotspot, or wired + Wi-Fi).
+    devices: dict[str, dict] = {}
+    for d in found:
+        devices.setdefault(d["name"], {**d, "addresses": []})["addresses"].append(d["ip"])
+    return {"devices": list(devices.values()), "searched": [str(n) for n in nets[:6]] + [HOTSPOT_IP],
+            "addresses_checked": len(candidates), "answered": open_hosts, "laptop": mine}
 
 
 # ---------------------------------------------------------------- USB-C (the DWARF as a drive)
@@ -253,6 +309,7 @@ class _WebSocket:
         expect = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest())
         if b" 101 " not in head.split(b"\r\n")[0] or expect not in head:
             raise ScopeError("The DWARF didn't accept the control connection.")
+        self._send_lock = threading.Lock()  # replies to pings come from the reader thread
 
     def send(self, payload: bytes, opcode: int = 2) -> None:
         mask = os.urandom(4)
@@ -260,7 +317,9 @@ class _WebSocket:
         header = bytes([0x80 | opcode]) + (bytes([0x80 | n]) if n < 126 else
                                            bytes([0x80 | 126]) + struct.pack(">H", n) if n < 65536 else
                                            bytes([0x80 | 127]) + struct.pack(">Q", n))
-        self.sock.sendall(header + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+        frame = header + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        with self._send_lock:
+            self.sock.sendall(frame)
 
     def _read(self, n: int) -> bytes:
         while len(self.pending) < n:
@@ -310,9 +369,11 @@ def stop_all(ip: str, hardware_id: int = 2) -> dict:
     try:
         for _, module, cmd, data in STOP_COMMANDS:
             ws.send(packet(module, cmd, data, client_id))
-        wanted = {(m, c) for _, m, c, _ in STOP_COMMANDS}
+        wanted: dict[tuple, int] = {}
+        for _, m, c, _ in STOP_COMMANDS:
+            wanted[(m, c)] = wanted.get((m, c), 0) + 1
         deadline = time.monotonic() + 4
-        while time.monotonic() < deadline and wanted - replies.keys():
+        while time.monotonic() < deadline and any(len(replies.get(k, [])) < n for k, n in wanted.items()):
             ws.sock.settimeout(max(0.1, deadline - time.monotonic()))
             try:
                 msg = ws.recv()
@@ -324,12 +385,13 @@ def stop_all(ip: str, hardware_id: int = 2) -> dict:
             key = (f.get(4), f.get(5))
             if key in wanted and f.get(6, 0) in (1, 3):
                 code = _parse(f.get(7, b"")).get(1, 0)
-                replies[key] = code - (1 << 64) if code >= 1 << 63 else code
+                replies.setdefault(key, []).append(code - (1 << 64) if code >= 1 << 63 else code)
     finally:
         ws.close()
     results = []
     for label, module, cmd, _ in STOP_COMMANDS:
-        code = replies.get((module, cmd))
+        got = replies.get((module, cmd))
+        code = got.pop(0) if got else None  # two motor stops share a command: one reply each
         results.append({"what": label, "code": code,
                         "result": "stopped" if code == 0 else "no reply" if code is None else f"declined (code {code})"})
     return {"ip": ip, "results": results, "sent": len(STOP_COMMANDS),

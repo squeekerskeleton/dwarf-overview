@@ -13,8 +13,8 @@ if not exist .venv (
   .venv\Scripts\python -m pip install --upgrade pip >nul
 )
 :run
-rem Picks up anything new in requirements.txt after an update. Quick when nothing changed.
 .venv\Scripts\python -m pip install -q -r requirements.txt
+.venv\Scripts\python -m dwarf_overview.setupcheck || (pause & exit /b 1)                  
 .venv\Scripts\python -m dwarf_overview
 rem Exit code 3 means an update was installed: start again without opening another browser tab.
 if %errorlevel%==3 (

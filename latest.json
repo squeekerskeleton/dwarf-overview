@@ -1,6 +1,6 @@
 {
-  "version": "0.4.1",
-  "notes": "Find my DWARF, Fill in Dwarfium, Stop all, and USB-C session import (now also finds sessions inside the DWARF_RAW folder).",
-  "sha256": "5439fe6216202db2022148e9830aed4f5db6a78284663868a924ca3257124d9a",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.4.1.zip"
+  "version": "0.5.0",
+  "notes": "Plan & Control: per-night target planner with one-click goto, simple camera panel with recommended presets, W/A/S/D joystick, live view with scroll zoom. Calibrate & learn with auto-apply and Alt-Az/EQ. Projects tab. Network tab with live status, connection tests, hotspot and Bluetooth fallbacks; wider Find my DWARF. First-time setup page and software check. 30 earth-tone themes.",
+  "sha256": "f520f76e8acd80f1861b8cd8a5f44714bad560960806565e72a14c9ba1008098",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.5.0.zip"
 }

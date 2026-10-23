@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update
+from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update, control, planner, projects, setupcheck, liveview, learn, netcheck
 
 RESTART_EXIT_CODE = 3  # start-windows.bat relaunches the app when it exits with this code
 
@@ -26,6 +26,19 @@ STATIC = Path(__file__).parent / "static"
 TOKEN = secrets.token_urlsafe(24)
 ANALYSES: dict[str, dict] = {}
 ANALYSES_LOCK = threading.Lock()
+
+
+def _capture_start(body: dict) -> dict:
+    filt, exp, gain, frames = int(body["filter"]), float(body["exposure"]), int(body["gain"]), int(body["frames"])
+    result = control.start_capture(filt, exp, gain, frames)
+    cfg = config.load()
+    if cfg.get("learn_enabled", True):
+        try:
+            learn.log_capture(str(body.get("target") or ""), str(body.get("kind") or ""), cfg.get("mount") or "altaz",
+                              filt, exp, gain, frames, body.get("conditions") or {})
+        except Exception:  # learning must never stop a capture
+            pass
+    return result
 
 
 def _drives() -> list[str]:
@@ -80,6 +93,27 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code: int = 200) -> None:
         self._send(code, json.dumps(obj).encode("utf-8"), "application/json")
 
+    def _live(self, camera: str) -> None:
+        try:
+            frames = liveview.frames(camera)
+            first = next(frames)
+        except (liveview.LiveError, StopIteration) as e:
+            return self._send(503, str(e).encode(), "text/plain")
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            jpg = first
+            while True:
+                self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(jpg)).encode()
+                                 + b"\r\n\r\n" + jpg + b"\r\n")
+                jpg = next(frames)
+        except (OSError, liveview.LiveError, StopIteration):
+            pass
+        finally:
+            frames.close()
+
     def _body(self) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n) or b"{}")
@@ -92,9 +126,11 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/":
             html = (STATIC / "index.html").read_text(encoding="utf-8").replace("__TOKEN__", TOKEN)
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
+        q = {k: v[0] for k, v in parse_qs(url.query).items()}
+        if url.path == "/api/live.mjpg" and q.get("t") == TOKEN:
+            return self._live(q.get("camera", "tele"))
         if self.headers.get("X-Token") != TOKEN:
             return self._send(403, b"Forbidden", "text/plain")
-        q = {k: v[0] for k, v in parse_qs(url.query).items()}
         if url.path == "/api/config":
             return self._json({**config.public_view(), "tools": tools.status(), "version": __version__})
         try:
@@ -112,11 +148,36 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/dwarf/sessions":
                 return self._json({"sessions": dwarf.list_sessions(q.get("via", "wifi")),
                                    "library": str(dwarf.library_dir())})
+            if url.path == "/api/plan":
+                cfg = config.load()
+                lat = float(q.get("lat") or cfg.get("site_lat") or "nan")
+                lon = float(q.get("lon") or cfg.get("site_lon") or "nan")
+                if lat != lat or lon != lon:
+                    return self._json({"error": "Add your site's latitude and longitude in Settings first."}, 400)
+                return self._json(planner.plan(q["date"], lat, lon, int(q.get("offset", 0)),
+                                               mount=q.get("mount") or cfg.get("mount") or "altaz"))
+            if url.path == "/api/presets":
+                return self._json(learn.presets(q.get("mount") or config.load().get("mount") or "altaz"))
+            if url.path == "/api/net/live":
+                return self._json(netcheck.live())
+            if url.path == "/api/learn/summary":
+                return self._json(learn.summary())
+            if url.path == "/api/control/status":
+                return self._json(control.status())
+            if url.path == "/api/control/camera":
+                return self._json(control.camera_options(int(q.get("camera", 0))))
+            if url.path == "/api/projects":
+                return self._json({"projects": projects.list_projects(), "root": str(projects.root())})
+            if url.path.startswith("/api/project/"):
+                return self._json(projects.get(int(url.path.rsplit("/", 1)[1])))
+            if url.path == "/api/setup/check":
+                return self._json(setupcheck.check())
             if url.path == "/api/dwarf/usb":
                 return self._json({"folders": scope.usb_folders()})
             if url.path == "/api/dwarf/session":
                 return self._json(dwarf.session_files(q.get("root", ""), q.get("name", "")))
-        except (update.UpdateError, dwarf.DwarfError, dwarfium_web.DwarfiumError) as e:
+        except (update.UpdateError, dwarf.DwarfError, dwarfium_web.DwarfiumError, control.ControlError,
+                projects.ProjectError, netcheck.NetError, ValueError, KeyError) as e:
             return self._json({"error": str(e)}, 400)
         if url.path == "/api/browse":
             return self._json(browse(q.get("folder")))
@@ -147,6 +208,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({**config.public_view(), "tools": tools.status(), "version": __version__})
             if path == "/api/analyze":
                 result = imaging.analyze(body["path"], body.get("mode") or "auto")
+                if config.load().get("learn_enabled", True):
+                    try:
+                        learn.record_measurement(result)
+                    except Exception:  # learning must never break measuring
+                        pass
                 aid = uuid.uuid4().hex[:12]
                 with ANALYSES_LOCK:
                     ANALYSES[aid] = result
@@ -166,6 +232,11 @@ class Handler(BaseHTTPRequestHandler):
                                                 analysis.get("shot_info") or {},
                                                 fits_y_up=info.get("format") != "FITS")
                     analysis["field"] = field
+                    if config.load().get("learn_enabled", True):
+                        try:
+                            learn.record_measurement(analysis)
+                        except Exception:
+                            pass
                     return field
 
                 return self._json({"job_id": tools.start_task(run_identify, "Plate-solving the star field")})
@@ -182,7 +253,7 @@ class Handler(BaseHTTPRequestHandler):
                 if subject and not history.shot_fields(shot_info)["target"]:
                     shot_info["target"] = subject
                 assessment_id = history.add_assessment(analysis["path"], shot_info,
-                                                       analysis["metrics"], result, model, note,
+                                                       {**analysis["metrics"], "shot_info": shot_info}, result, model, note,
                                                        analysis.get("mode", "deepsky"), analysis["overview_jpeg_b64"])
                 return self._json({"assessment_id": assessment_id, "model": model, **result})
             if path == "/api/compare":
@@ -221,6 +292,47 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/dwarfium/autofill":
                 return self._json({"ready": dwarfium_web.prepare_autofill(), "url": dwarfium_web.web_url(),
                                    "page": dwarfium_web.HELPER_NAME})
+            if path.startswith("/api/control/"):
+                action = path[len("/api/control/"):]
+                actions = {
+                    "connect": lambda: control.connect(), "disconnect": lambda: control.disconnect(),
+                    "goto": lambda: control.goto(float(body["ra_hours"]), float(body["dec"]), str(body.get("name") or "Target")),
+                    "stop_goto": lambda: control.stop_goto(),
+                    "joystick": lambda: control.joystick(body["angle"], body["length"]),
+                    "joystick_stop": lambda: control.joystick_stop(),
+                    "capture_start": lambda: _capture_start(body),
+                    "capture_stop": lambda: control.stop_capture(),
+                }
+                if action not in actions:
+                    return self._json({"error": "Unknown action."}, 404)
+                return self._json(actions[action]())
+            if path == "/api/projects/create":
+                return self._json(projects.create(body["name"]))
+            if path == "/api/project/notes":
+                return self._json(projects.save_notes(int(body["id"]), str(body.get("notes", ""))))
+            if path == "/api/project/add":
+                return self._json(projects.add_photo(int(body["id"]), body["file"], body.get("title", ""),
+                                                     body.get("preview_b64")))
+            if path == "/api/project/photo":
+                return self._json(projects.save_photo(int(body["photo_id"]), body.get("title"), body.get("notes")))
+            if path == "/api/project/photo/remove":
+                return self._json(projects.remove_photo(int(body["photo_id"])))
+            if path == "/api/project/open":
+                tools.open_in("folder", str(Path(projects.get(int(body["id"]))["folder"]) / "x"))
+                return self._json({"ok": True})
+            if path == "/api/setup/done":
+                config.save({"setup_done": True})
+                return self._json({"ok": True})
+            if path == "/api/net/diagnose":
+                addrs = [str(a) for a in body.get("addresses") or []]
+                return self._json({"job_id": tools.start_task(lambda: netcheck.diagnose(addrs),
+                                                              "Testing every connection to the DWARF")})
+            if path == "/api/net/join_hotspot":
+                ssid, pw = str(body.get("ssid") or ""), str(body.get("password") or "")
+                return self._json({"job_id": tools.start_task(lambda: netcheck.join_hotspot(ssid, pw),
+                                                              "Joining the DWARF's hotspot")})
+            if path == "/api/net/rejoin":
+                return self._json(netcheck.rejoin_previous())
             if path == "/api/scope/scan":
                 return self._json({"job_id": tools.start_task(scope.scan, "Searching the local network for your DWARF")})
             if path == "/api/scope/stop":
@@ -254,7 +366,7 @@ class Handler(BaseHTTPRequestHandler):
                 script = body.get("script") or a["assessment"].get("siril_script_text")
                 return self._json({"job_id": tools.run_siril_script(body.get("path") or a["file_path"], script)})
         except (assess.AssessmentError, update.UpdateError, dwarf.DwarfError, dwarfium_web.DwarfiumError,
-                scope.ScopeError) as e:
+                scope.ScopeError, control.ControlError, projects.ProjectError, netcheck.NetError, KeyError) as e:
             return self._json({"error": str(e)}, 400)
         except (FileNotFoundError, ValueError, KeyError) as e:
             return self._json({"error": str(e)}, 400)
