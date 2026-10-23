@@ -83,7 +83,52 @@ def text(v) -> str:
     return v.decode("utf-8", "replace") if isinstance(v, (bytes, bytearray)) else (v or "")
 
 
+# ---------------------------------------------------------------- command log
+
+_LOG_LOCK = threading.Lock()
+
+
+def log_path():
+    return config.data_dir() / "dwarf-commands.log"
+
+
+def _log(direction: str, module: int, cmd: int, typ: int, data: bytes) -> None:
+    """Every command and reply, so problems on a real DWARF can be read afterwards. Data is cut to 48 bytes,
+    and system-module payloads (which can hold Wi-Fi details) are never written."""
+    try:
+        fields = parse(data) if data else {}
+        code = sint(one(fields, 2 if module == 6 else 1, 0)) if typ in (1, 3) and fields else ""
+        shown = "" if module == 4 else data[:48].hex()
+        line = f"{time.strftime('%H:%M:%S')} {direction} {module}/{cmd} type={typ} code={code} {shown}\n"
+        with _LOG_LOCK:
+            path = log_path()
+            if path.exists() and path.stat().st_size > 2_000_000:
+                path.replace(path.with_suffix(".old.log"))
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line)
+    except Exception:  # logging must never break control
+        pass
+
+
+def log_tail(lines: int = 150) -> list[str]:
+    try:
+        return log_path().read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
+    except OSError:
+        return []
+
+
 # ---------------------------------------------------------------- the link
+
+# Battery 15201, charging 15202, storage 15203, body temperature 15243, sensor temperature 15292, and the
+# device-state snapshot 16405 that holds all of them.
+TELEMETRY_CMDS = {15201, 15202, 15203, 15243, 15292, 16405}
+
+
+def _storage(f: dict) -> dict:
+    if not one(f, 4, 0):  # is_valid
+        return {"storage_valid": False}
+    return {"storage_valid": True, "storage_free_gb": one(f, 1, 0), "storage_total_gb": one(f, 2, 0)}
+
 
 class Link:
     def __init__(self, ip: str, hardware_id: int):
@@ -95,10 +140,11 @@ class Link:
         self.cv = threading.Condition()
         self.replies: dict[tuple[int, int], list[dict]] = {}
         self.closed = False
-        self.last_rx = self.last_tx = time.monotonic()
+        self.last_rx = self.last_tx = time.monotonic() - 4.5  # first device-state read half a second in
         self.goto = {}            # latest one-click goto progress
         self.events: list[dict] = []
         self.joy_deadline = 0.0
+        self.telemetry: dict = {}  # battery, charging, storage, temperature, as the DWARF reports them
         threading.Thread(target=self._reader, daemon=True).start()
         threading.Thread(target=self._keeper, daemon=True).start()
 
@@ -112,21 +158,73 @@ class Link:
                 f = parse(msg)
                 module, cmd, typ = one(f, 4, 0), one(f, 5, 0), one(f, 6, 0)
                 data = one(f, 7, b"")
+                if cmd not in (16405,):  # skip the 5 s heartbeat
+                    _log("<-", module, cmd, typ, data)
                 if cmd in (11013, 11014) and typ in (1, 3):
                     d = parse(data)
                     self.goto = {"step": sint(one(d, 1, 0)), "code": sint(one(d, 2, 0)), "done": bool(one(d, 3, 0)),
                                  "at": time.time()}
+                if cmd in TELEMETRY_CMDS and typ != 0:
+                    try:
+                        self._telemetry(cmd, data)
+                    except Exception:  # a reading we can't decode is skipped
+                        pass
                 if typ == 2:
                     self.events = (self.events + [{"cmd": cmd, "at": time.time()}])[-50:]
                 with self.cv:
                     self.replies.setdefault((module, cmd), []).append({"type": typ, "data": data})
                     self.cv.notify_all()
-        except (OSError, ConnectionError):
-            pass
+        except (OSError, ConnectionError) as e:
+            _log("xx", 0, 0, 0, b"")
+            with _LOG_LOCK:
+                try:
+                    with open(log_path(), "a", encoding="utf-8") as fh:
+                        fh.write(f"{time.strftime('%H:%M:%S')} link closed: {type(e).__name__}: {e}\n")
+                except OSError:
+                    pass
         finally:
             self.closed = True
             with self.cv:
                 self.cv.notify_all()
+
+    def _telemetry(self, cmd: int, data: bytes) -> None:
+        t = dict(self.telemetry)
+        if cmd == 16405:  # device state snapshot (the heartbeat reply)
+            f = parse(data)
+            if sint(one(f, 7, 0)) != 0:
+                return
+            state = parse(one(f, 6, b"")) if one(f, 6) is not None else {}
+            if one(state, 9) is not None:
+                t["battery"] = sint(one(parse(one(state, 9)), 1, 0))
+            if one(state, 3) is not None:
+                t["charging"] = sint(one(parse(one(state, 3)), 1, 0))
+            if one(state, 4) is not None:
+                t.update(_storage(parse(one(state, 4))))
+            if one(state, 7) is not None:
+                tf = parse(one(state, 7))
+                if sint(one(tf, 1, 0)) == 0:
+                    t["temperature"] = sint(one(tf, 2, 0))
+            tele = parse(one(f, 2)) if one(f, 2) is not None else {}
+            if one(tele, 7) is not None:
+                cmos = parse(one(tele, 7))
+                if one(cmos, 1) is not None:
+                    t["sensor_temperature"] = sint(one(cmos, 1))
+        else:
+            f = parse(data)
+            if cmd == 15201:
+                t["battery"] = sint(one(f, 1, 0))
+            elif cmd == 15202:
+                t["charging"] = sint(one(f, 1, 0))
+            elif cmd == 15203:
+                t.update(_storage(f))
+            elif cmd == 15243 and sint(one(f, 1, 0)) == 0:
+                t["temperature"] = sint(one(f, 2, 0))
+            elif cmd == 15292 and one(f, 1) is not None:
+                t["sensor_temperature"] = sint(one(f, 1))
+        if "battery" in t and not 0 <= t["battery"] <= 100:
+            t.pop("battery")
+        t["at"] = time.time()
+        self.telemetry = t
 
     def _keeper(self):
         """Heartbeat like Dwarfium (device state every 5 s when idle) and the joystick dead-man stop."""
@@ -151,6 +249,8 @@ class Link:
         with self.send_lock:
             self.ws.send(scope.packet(module, cmd, data, self.client_id))
             self.last_tx = time.monotonic()
+        if cmd != 16405:
+            _log("->", module, cmd, 0, data)
 
     def request(self, module: int, cmd: int, data: bytes = b"", timeout: float = 10, code_field: int = 1) -> dict:
         with self.cv:
@@ -315,11 +415,12 @@ def connect() -> dict:
             "control_code": lock}
 
 
-def open_preview(camera: str = "tele") -> dict:
-    """Switch the camera's video stream on (what Dwarfium does when its Camera page opens).
+def open_preview(camera: str = "tele", go_live: bool = False) -> dict:
+    """Switch the camera's video stream on (what Dwarfium does when its camera button is pressed).
 
-    enterCamera (14/16404), then the preview-quality request for that camera (tele 1/10050, wide 2/12036,
-    level 1). This only turns the video on: nothing moves, focuses or starts capturing.
+    enterCamera (14/16404), optionally goLive for that camera (tele 3/11010, wide 3/11020, which a cold DWARF
+    needs before it streams; it also ends live stacking, so it's only sent when the plain way gave no picture),
+    then the preview-quality request (tele 1/10050, wide 2/12036, level 1). Nothing moves or focuses.
     """
     l = link(connect=True)
     if not _WANTED:
@@ -328,12 +429,18 @@ def open_preview(camera: str = "tele") -> dict:
     if r["code"] != 0:
         raise ControlError(f"The DWARF wouldn't open its camera (code {r['code']}). If the DWARFLAB phone app or "
                            "Dwarfium is in control, close it and try again.")
+    live_code = None
+    if go_live:
+        try:
+            live_code = l.request(3, 11010 if camera == "tele" else 11020, b"", timeout=8)["code"]
+        except ControlError:
+            live_code = "no reply"
     module, cmd = (1, 10050) if camera == "tele" else (2, 12036)
     try:
         code = l.request(module, cmd, f_int(1, 1), timeout=5)["code"]
     except ControlError:  # older firmware doesn't know this request; the camera is already on
         code = None
-    return {"camera": camera, "preview_code": code}
+    return {"camera": camera, "enter_code": r["code"], "live_code": live_code, "preview_code": code}
 
 
 # ---------------------------------------------------------------- AWAY (stow) and reboot
@@ -516,7 +623,39 @@ def status() -> dict:
     if not l or l.closed:
         return {"connected": False, "reconnect": recon, "away": away_info}
     return {"connected": True, "ip": l.ip, "goto": l.goto, "seconds_since_heard": round(time.monotonic() - l.last_rx, 1),
-            "reconnect": recon, "away": away_info}
+            "reconnect": recon, "away": away_info, "telemetry": l.telemetry}
+
+
+_STORAGE_CACHE: dict = {}
+
+
+def health() -> dict:
+    """Battery, temperature and storage for Plan & Control.
+
+    Battery and temperature come over the control link (the DWARF reports them while connected). Storage also
+    comes from device info over plain HTTP, so it shows even when another app is in control. Only the SD card
+    numbers are taken from device info; the rest of it (which holds Wi-Fi details) is ignored."""
+    l = _LINK
+    out = dict(l.telemetry) if l and not l.closed else {}
+    out["connected"] = bool(l and not l.closed)
+    if "storage_total_gb" not in out:
+        ip = (config.load().get("dwarf_ip") or "").strip()
+        cached = _STORAGE_CACHE.get(ip)
+        if cached and time.time() - cached["at"] < 30:
+            out.update(cached["data"])
+        elif scope._is_local(ip):
+            try:
+                req = urllib.request.Request(f"http://{ip}:8082/deviceInfo", data=b"{}", method="POST",
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    sd = (json.loads(resp.read()).get("data") or {}).get("sdCardInfo") or {}
+                data = {"storage_free_gb": sd.get("availableSize"), "storage_total_gb": sd.get("totalSize"),
+                        "storage_valid": sd.get("totalSize") is not None}
+                _STORAGE_CACHE[ip] = {"at": time.time(), "data": data}
+                out.update(data)
+            except (OSError, ValueError, AttributeError):
+                pass
+    return out
 
 
 def away_watcher() -> None:

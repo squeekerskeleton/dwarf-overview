@@ -166,6 +166,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(learn.summary())
             if url.path == "/api/control/status":
                 return self._json(control.status())
+            if url.path == "/api/scope/health":
+                return self._json(control.health())
             if url.path == "/api/control/camera":
                 return self._json(control.camera_options(int(q.get("camera", 0))))
             if url.path == "/api/projects":

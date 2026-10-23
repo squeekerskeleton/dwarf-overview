@@ -1,2 +1,2 @@
 """DWARF Overview: assess DWARF 3 astrophotos with Claude and plan the processing."""
-__version__ = "0.6.2"
+__version__ = "0.6.3"

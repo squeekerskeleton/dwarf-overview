@@ -1,6 +1,6 @@
 {
-  "version": "0.6.2",
-  "notes": "Safety fix: AWAY now only stops everything; moving to the AWAY position is switched off until it's fixed.",
-  "sha256": "dffb92faa04328b8d4d3014e625140ff1aea06c6d167a587bc6589c03bd0989a",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.2.zip"
+  "version": "0.6.3",
+  "notes": "Plan & Control shows battery, temperature and storage. Live view retries with goLive (what Dwarfium sends) and shows the DWARF's reply codes. Every command and reply is logged to dwarf-commands.log and included in Diagnose.",
+  "sha256": "4d00f8e954debbaeff7384d015b23c4ea37699f78a8269af8b2a9a95b71911c4",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.3.zip"
 }

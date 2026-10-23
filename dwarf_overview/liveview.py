@@ -16,7 +16,7 @@ import time
 from . import config, scope
 
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
-OPEN_TRIES = 5
+OPEN_TRIES = 4
 
 
 class LiveError(Exception):
@@ -91,7 +91,7 @@ _READERS: dict[str, _Reader] = {}
 _LOCK = threading.Lock()
 
 
-def _reader(camera: str) -> _Reader:
+def _reader(camera: str, go_live: bool = False) -> _Reader:
     from . import control
     ip = (config.load().get("dwarf_ip") or "").strip()
     if not scope._is_local(ip):
@@ -103,13 +103,15 @@ def _reader(camera: str) -> _Reader:
             return r
     # Turn the camera's video on first, so there's no need to open Dwarfium's Camera page.
     try:
-        control.open_preview(camera)
+        opened = control.open_preview(camera, go_live=go_live)
     except control.ControlError as e:
         raise LiveError(f"Couldn't switch the DWARF's camera on: {e}")
+    time.sleep(2)  # give the camera a moment to start streaming
     with _LOCK:
         r = _READERS.get(url)
         if not r or not r.alive:
             r = _READERS[url] = _Reader(url)
+        r.opened = opened
         return r
 
 
@@ -134,11 +136,20 @@ def frames(camera: str = "tele"):
 
 
 def start(camera: str = "tele", timeout: float = 30) -> dict:
-    """Switch the camera on and wait for the first picture, so the page can show a clear error if it fails."""
-    r = _reader(camera)
-    with r.cv:
-        r.cv.wait_for(lambda: r.frame is not None or not r.alive, timeout=timeout)
+    """Switch the camera on and wait for the first picture, so the page can show a clear error if it fails.
+
+    If the plain way gives no picture, try once more with goLive, which a cold DWARF needs."""
+    for go_live in (False, True):
+        r = _reader(camera, go_live)
+        with r.cv:
+            r.cv.wait_for(lambda: r.frame is not None or not r.alive, timeout=timeout)
+        if r.frame is not None:
+            break
+        r.alive = False
     if r.frame is None:
-        raise LiveError(r.error or "The camera is on but no picture arrived. Click Show live view again.")
+        o = getattr(r, "opened", {}) or {}
+        codes = f"enterCamera {o.get('enter_code')}, goLive {o.get('live_code')}, preview {o.get('preview_code')}"
+        raise LiveError(f"{r.error or 'The camera is on but no picture arrived.'} (DWARF replies: {codes}; "
+                        "0 means OK.) If the DWARFLAB phone app or Dwarfium is open, close it and try again.")
     r.last_viewer = time.monotonic()  # keep it running while the page connects
     return {"ok": True, "camera": camera}

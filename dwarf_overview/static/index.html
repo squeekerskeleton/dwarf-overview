@@ -257,6 +257,12 @@
         <div class="row"><button class="primary" id="ctlConnect">Connect</button><button id="ctlDisconnect">Disconnect</button><button id="ctlFind">Find my DWARF</button><span id="ctlStatus" class="muted"></span></div>
         <div class="caption">The DWARF takes orders from one app at a time. Connecting here takes control from Dwarfium or the DWARFLAB phone app, so close those (or click Disconnect here before using them) to avoid a connect/disconnect tug of war.</div>
         <div id="gotoStatus" class="caption" style="margin-top:4px"></div>
+        <div id="health" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-top:10px">
+          <div class="metric" id="hBattery"><div class="caption" style="margin:0">Battery</div><b>&ndash;</b></div>
+          <div class="metric" id="hTemp"><div class="caption" style="margin:0">Temperature</div><b>&ndash;</b></div>
+          <div class="metric" id="hStorage"><div class="caption" style="margin:0">Storage</div><b>&ndash;</b></div>
+        </div>
+        <div id="healthNote" class="caption"></div>
       </div>
       <div class="card"><h2>Live view and moving</h2>
         <div class="row" style="margin-bottom:6px"><span class="modebar"><button id="camTele" class="on">Telephoto</button><button id="camWide">Wide</button></span>
@@ -1204,7 +1210,7 @@ let plan = null, camOpts = null, joySpeed = 0.4, presets = null;
 function openControl() {
   if (!$("planDate").value) { const d = new Date(); if (d.getHours() < 9) d.setDate(d.getDate() - 1); $("planDate").value = d.toLocaleDateString("en-CA"); }
   $("planSite").textContent = cfg.site_lat !== "" && cfg.site_lon !== "" ? `${cfg.site_name || "Site"}: ${cfg.site_lat}, ${cfg.site_lon}` : "Set your site in Settings";
-  ctlRefresh();
+  ctlRefresh(); healthRefresh();
   if (!plan && cfg.site_lat !== "") $("planBtn").click();
   if (!$("camExp").options.length) fillCamera(null);
   $("mountSel").value = cfg.mount || "altaz"; $("learnOn").checked = cfg.learn_enabled !== false; $("autoApply").checked = cfg.auto_apply !== false;
@@ -1243,7 +1249,33 @@ async function ctlRefresh() {
     return s;
   } catch (e) { $("ctlStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
 }
-setInterval(() => { if (!$("controlTab").classList.contains("hidden")) ctlRefresh(); }, 3000);
+function healthTile(id, value, level, sub) {
+  const el = $(id);
+  el.className = "metric" + (level ? " " + level : "");
+  el.querySelector("b").innerHTML = value;
+  let s = el.querySelector(".sub");
+  if (!s) { s = document.createElement("div"); s.className = "caption sub"; s.style.margin = "0"; el.appendChild(s); }
+  s.textContent = sub || "";
+}
+async function healthRefresh() {
+  try {
+    const h = await api("/api/scope/health");
+    if (h.battery != null) healthTile("hBattery", `${h.battery}%`, h.battery < 20 ? "bad" : h.battery < 40 ? "warn" : "good", h.battery < 20 ? "Charge it soon" : "");
+    else healthTile("hBattery", "&ndash;", "", h.connected ? "Waiting for the DWARF" : "Connect to see");
+    if (h.temperature != null || h.sensor_temperature != null) {
+      const c = h.temperature != null ? h.temperature : h.sensor_temperature;
+      healthTile("hTemp", `${c}&deg;C`, c >= 65 ? "bad" : c >= 55 ? "warn" : "good",
+        h.temperature != null && h.sensor_temperature != null ? `Sensor ${h.sensor_temperature}°C` : h.temperature != null ? "Inside the DWARF" : "Camera sensor");
+    } else healthTile("hTemp", "&ndash;", "", h.connected ? "Waiting for the DWARF" : "Connect to see");
+    if (h.storage_valid === false) healthTile("hStorage", "No card", "bad", "");
+    else if (h.storage_total_gb != null) {
+      const free = h.storage_free_gb, tot = h.storage_total_gb;
+      healthTile("hStorage", `${free} GB free`, free < 5 ? "bad" : free < 15 ? "warn" : "good", `of ${tot} GB (${Math.round(100 * (tot - free) / Math.max(tot, 1))}% used)`);
+    } else healthTile("hStorage", "&ndash;", "", "DWARF not reachable");
+    $("healthNote").textContent = h.connected ? "" : "Battery and temperature show while the app is connected; storage shows whenever the DWARF is reachable.";
+  } catch (e) { $("healthNote").textContent = e.message; }
+}
+setInterval(() => { if (!$("controlTab").classList.contains("hidden")) { ctlRefresh(); healthRefresh(); } }, 3000);
 $("ctlFind").onclick = () => findDwarf($("ctlStatus"));
 $("ctlConnect").onclick = async () => {
   $("ctlStatus").innerHTML = '<span class="spinner"></span> Connecting&hellip;';

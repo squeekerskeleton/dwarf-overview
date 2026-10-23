@@ -102,6 +102,7 @@ A simpler alternative to Dwarfium for a night out.
 - **Go to** points the DWARF at a target in one click. It calibrates first if it needs to, then tracks. **Copy coordinates** copies the name, RA and Dec to paste into Dwarfium or the DWARFLAB app.
 - **Camera settings.** Choose the filter, exposure, gain and frame count, or pick a recommended preset. Then click **Start capture**. When you're connected, the choices are read from your DWARF.
 - **Moving the telescope.** Click the live view, then hold **W**/**S** to tilt up or down and **A**/**D** to turn left or right. Hold **Shift** for full speed. Letting go stops the telescope, and so does losing contact. Scroll over the live view to zoom, and double-click to reset.
+- **Battery, temperature and storage.** The Telescope card shows the DWARF's battery level, its temperature (and the camera sensor's, when it reports it) and free space on its card. Battery and temperature show while the app is connected; storage shows whenever the DWARF is reachable.
 - **Mount.** Choose Alt-Az for normal use or EQ for wedge mode. Alt-Az limits subs to 15 s, while EQ mode allows 30 to 60 s.
 
 Goto needs your site's latitude and longitude in Settings.
@@ -129,7 +130,10 @@ Click **Diagnose** at the top, say what's going wrong, and leave **Include a scr
 - the DWARF connection and control link;
 - Dwarfium's status;
 - recent errors from the app and the page;
-- recent background jobs.
+- recent background jobs;
+- the last commands sent to the DWARF and its replies.
+
+Every command the app sends to the DWARF, and each reply, is also written to `dwarf-commands.log` in the data folder. Wi-Fi details are never written there.
 
 Claude replies with the likely cause and steps to fix it. It can also offer one-click fixes: find the DWARF, test connections, connect or hand back control, save an address, switch the mount, or open a tab or Settings. A fix only runs when you click it.
 

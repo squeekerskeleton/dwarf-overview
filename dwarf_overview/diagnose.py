@@ -113,6 +113,11 @@ def collect(client: dict | None = None) -> dict:
                               "last_log": (j.get("log") or [])[-3:]} for j in list(tools.JOBS.values())[-8:]]
     with _LOCK:
         report["app_errors"] = list(_ERRORS)[-25:]
+    try:
+        from . import control as _control
+        report["dwarf_command_log"] = _control.log_tail(120)
+    except Exception:
+        pass
     return report
 
 
