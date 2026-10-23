@@ -1,6 +1,6 @@
 {
-  "version": "0.6.0",
-  "notes": "AWAY button (stop everything and tuck the lens away), Reboot DWARF in Settings, auto-reconnect (5 searches, once a second, then a clear error), and live view now switches the camera on itself.",
-  "sha256": "f53d6b7827d7a0bd64bc0ac4f42470cda2d826f741dfedaf23986d4ff5c630e2",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.0.zip"
+  "version": "0.6.1",
+  "notes": "AWAY now returns to your own position: the next time the DWARF connects, the app saves where you placed it (nothing moves). Change it any time in Settings. Fixes how motor replies were read.",
+  "sha256": "247517af4e57e9320ccec237d69d1edfcf8432ec0a2d8b4eb7a50d6f6c0dca67",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.1.zip"
 }

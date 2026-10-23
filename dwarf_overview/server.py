@@ -336,6 +336,11 @@ class Handler(BaseHTTPRequestHandler):
                 holder["id"] = tools.start_task(lambda: control.away(note),
                                                 "AWAY: stopping everything and tucking the lens away")
                 return self._json({"job_id": holder["id"]})
+            if path == "/api/scope/away_record":
+                if body.get("now"):
+                    return self._json({"saved": control.record_away()})
+                config.save({"away_pending": True})
+                return self._json({"pending": True})
             if path == "/api/scope/reboot":
                 return self._json(control.reboot())
             if path == "/api/live/start":
@@ -402,6 +407,7 @@ def main() -> None:
     print(f"DWARF Overview {__version__} is running at {url}")
     print(f"Data and history are stored in {config.data_dir()}")
     print("Close this window (or press Ctrl+C) to stop it.")
+    control.away_watcher()
     if not os.environ.get("DWARF_OVERVIEW_NO_BROWSER"):
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:

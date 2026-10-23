@@ -29,6 +29,8 @@ DEFAULTS = {
     "theme_secondary": "",
     "mount": "altaz",
     "previous_wifi": "",
+    "away_pending": True,
+    "away_position": None,
     "learn_enabled": True,
     "auto_apply": True,
     "dwarf_ip": "",

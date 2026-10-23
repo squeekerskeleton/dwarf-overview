@@ -167,11 +167,10 @@ Settings has 30 earth tones. Pick a primary colour for highlights and tabs, and 
 
 ## AWAY, reboot and auto-reconnect
 
-- **AWAY**, the brown button at the top, does two things:
-  1. It runs Stop all.
-  2. It sends the telescope to its home position so the lens is tucked away. It uses the same motor reset as Dwarfium's "Reset motors".
-
-  The banner shows each step. Use it before packing up, or when you walk away.
+- **AWAY**, the brown button at the top, runs Stop all, then moves the DWARF back to *your* AWAY position.
+  - **Setting your AWAY position:** with the DWARF switched off, put it by hand where the lens is protected, then switch it on. The next time it connects, the app reads the motor positions and saves them. Nothing moves while it does this, and a green banner confirms it.
+  - **Changing it later:** Settings → AWAY position has **Record next time the DWARF connects** and **Record where it is now**.
+  - **If no position is saved yet,** AWAY falls back to the factory home position (Dwarfium's "Reset motors") and says so.
 - **Reboot DWARF** is in Settings. It restarts the telescope. The DWARF is offline for 1–2 minutes, and the app waits for it, then reconnects by itself.
 - **Auto-reconnect.** If the app's control link to the DWARF drops, the app searches for it 5 times, once a second:
   - first its last address;
