@@ -65,17 +65,33 @@ def _listing(path: str) -> list[dict]:
 
 
 def _usb_root(root: str) -> Path | None:
-    """The root as a local folder, if it's an Astronomy folder on a DWARF plugged in over USB-C."""
-    return Path(root) if root in scope.usb_folders() else None
+    """The root as a local folder, if it's inside the Astronomy folder of a DWARF plugged in over USB-C."""
+    try:
+        r = Path(root).resolve()
+    except (OSError, ValueError):
+        return None
+    for folder in scope.usb_folders():
+        base = Path(folder).resolve()
+        if r == base or base in r.parents:
+            return r
+    return None
+
+
+def _is_session(d: Path) -> bool:
+    return (d / "shotsInfo.json").exists() or any(d.glob("stacked*"))
 
 
 def _local_sessions(folder: str) -> list[dict]:
+    """Session folders sit directly in Astronomy, or one level down (for example Astronomy/DWARF_RAW/...)."""
     from datetime import datetime
     out = []
     for d in Path(folder).iterdir():
-        if d.is_dir() and not SKIP_FOLDERS.search(d.name):
-            out.append({"name": d.name, "root": folder,
-                        "date": datetime.fromtimestamp(d.stat().st_mtime).strftime("%d-%b-%Y %H:%M")})
+        if not d.is_dir() or SKIP_FOLDERS.search(d.name):
+            continue
+        for s in ([d] if _is_session(d) else [c for c in d.iterdir() if c.is_dir() and not SKIP_FOLDERS.search(c.name)]):
+            if _is_session(s):
+                out.append({"name": s.name, "root": str(s.parent),
+                            "date": datetime.fromtimestamp(s.stat().st_mtime).strftime("%d-%b-%Y %H:%M")})
     return sorted(out, key=lambda s: s["name"], reverse=True)
 
 
