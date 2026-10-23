@@ -11,7 +11,7 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  body.night { filter: sepia(1) saturate(6) hue-rotate(-50deg) brightness(.6); }
+  body.night { filter: sepia(1) saturate(4) hue-rotate(-22deg) brightness(.62); }
   header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
   header h1 { font-size: 17px; margin: 0 12px 0 0; }
   header .spacer { flex: 1; }
@@ -95,7 +95,7 @@
   <button id="dwarfiumBtn" class="hidden" title="Open Dwarfium to control the telescope">Open Dwarfium</button>
   <button id="updateBtn" title="Check for a new version">v<span id="version"></span></button>
   <span id="keyStatus" class="muted"></span>
-  <button id="nightBtn" title="Red night-vision mode for use in the field">Night mode</button>
+  <button id="nightBtn" title="Dim orange night-vision mode for use in the field">Night mode</button>
   <button id="settingsBtn">Settings</button>
 </header>
 
@@ -231,6 +231,7 @@
   <label for="startFolder">Start the file browser in</label><input id="startFolder">
   <div class="grid2"><div><label for="dwarfIp">DWARF IP address (for From DWARF)</label><input id="dwarfIp" placeholder="e.g. 192.168.1.42"></div>
     <div><label for="libFolder">Save DWARF downloads to</label><input id="libFolder" placeholder="Pictures\DWARF Library"></div></div>
+  <label for="astapPath">ASTAP plate solver (leave blank to auto-detect)</label><input id="astapPath">
   <label for="dwarfiumPath">Dwarfium desktop app (leave blank to auto-detect)</label><input id="dwarfiumPath">
   <label for="dwarfiumWeb">Dwarfium web address (for the Telescope tab)</label><input id="dwarfiumWeb" placeholder="http://127.0.0.1:8000">
   <label for="updateUrl">Update source (latest.json address)</label><input id="updateUrl">
@@ -300,10 +301,10 @@ $("settingsBtn").onclick = () => {
   $("model").value = cfg.model; $("effort").value = cfg.effort; $("sirilPath").value = cfg.siril_path;
   $("gxPath").value = cfg.graxpert_path; $("startFolder").value = cfg.start_folder;
   $("ppPath").value = cfg.pipp_path; $("asPath").value = cfg.autostakkert_path; $("rxPath").value = cfg.registax_path;
-  $("dwarfIp").value = cfg.dwarf_ip; $("libFolder").value = cfg.library_folder; $("dwarfiumPath").value = cfg.dwarfium_path; $("dwarfiumWeb").value = cfg.dwarfium_web_url; $("updateUrl").value = cfg.update_url;
+  $("dwarfIp").value = cfg.dwarf_ip; $("libFolder").value = cfg.library_folder; $("dwarfiumPath").value = cfg.dwarfium_path; $("astapPath").value = cfg.astap_path; $("dwarfiumWeb").value = cfg.dwarfium_web_url; $("updateUrl").value = cfg.update_url;
   $("imPath").value = cfg.imppg_path; $("otherName").value = cfg.other_app_name; $("otherPath").value = cfg.other_app_path;
   const t = cfg.tools, f = (v) => v ? '<span class="ok">found</span>' : '<span class="error">not found</span>';
-  $("toolStatus").innerHTML = `GraXpert: ${f(t.graxpert)} &middot; Siril: ${f(t.siril)} &middot; siril-cli: ${f(t.siril_cli)}<br>Dwarfium: ${f(t.dwarfium)} &middot; PIPP: ${f(t.pipp)} &middot; AutoStakkert: ${f(t.autostakkert)} &middot; RegiStax: ${f(t.registax)} &middot; ImPPG: ${f(t.imppg)}<br>Data folder: ${esc(cfg.data_dir)}`;
+  $("toolStatus").innerHTML = `GraXpert: ${f(t.graxpert)} &middot; Siril: ${f(t.siril)} &middot; siril-cli: ${f(t.siril_cli)}<br>ASTAP: ${f(t.astap)} &middot; Dwarfium: ${f(t.dwarfium)} &middot; PIPP: ${f(t.pipp)} &middot; AutoStakkert: ${f(t.autostakkert)} &middot; RegiStax: ${f(t.registax)} &middot; ImPPG: ${f(t.imppg)}<br>Data folder: ${esc(cfg.data_dir)}`;
   $("settings").showModal();
 };
 $("closeSettings").onclick = () => $("settings").close();
@@ -312,7 +313,7 @@ $("saveSettings").onclick = async () => {
     siril_path: $("sirilPath").value.trim(), graxpert_path: $("gxPath").value.trim(), start_folder: $("startFolder").value.trim(),
     pipp_path: $("ppPath").value.trim(), autostakkert_path: $("asPath").value.trim(), registax_path: $("rxPath").value.trim(),
     imppg_path: $("imPath").value.trim(), dwarf_ip: $("dwarfIp").value.trim(), library_folder: $("libFolder").value.trim(),
-    dwarfium_path: $("dwarfiumPath").value.trim(), dwarfium_web_url: $("dwarfiumWeb").value.trim(), update_url: $("updateUrl").value.trim(), other_app_name: $("otherName").value.trim(), other_app_path: $("otherPath").value.trim() });
+    dwarfium_path: $("dwarfiumPath").value.trim(), astap_path: $("astapPath").value.trim(), dwarfium_web_url: $("dwarfiumWeb").value.trim(), update_url: $("updateUrl").value.trim(), other_app_name: $("otherName").value.trim(), other_app_path: $("otherPath").value.trim() });
   $("settings").close(); loadConfig();
 };
 $("clearKey").onclick = async () => { cfg = await api("/api/config", { clear_api_key: true }); $("settings").close(); loadConfig(); };
@@ -413,12 +414,13 @@ async function analyze(path, mode) {
   $("shotInfo").textContent = Object.keys(si0).length ? "shotsInfo.json: " + Object.entries(si0).filter(([, v]) => typeof v !== "object").slice(0, 10).map(([k, v]) => `${k}=${v}`).join(", ") : "No shotsInfo.json found next to this file.";
   if (current.mode === "moon") {
     $("ovCap").textContent = current.kind === "video" ? "Sharpest sampled frame" : `${m.image.width} x ${m.image.height}, ${m.image.format}, ${m.image.bit_depth}`;
-    $("metrics").innerHTML = moonCards(m, current.kind);
+    $("metrics").innerHTML = metricCard("Subject", "The Moon", m.disk && m.disk.approx_illuminated_percent != null ? `about ${m.disk.approx_illuminated_percent}% lit` : "", "good") + moonCards(m, current.kind);
     return;
   }
   const s = m.stars || {}, g = m.gradient, st = m.stretch, c = m.color;
   $("ovCap").textContent = `${m.image.width} x ${m.image.height}, ${m.image.format}, ${m.image.bit_depth}` + (current.display_stretched ? " (auto-stretched for display; the file itself is linear)" : "");
   $("metrics").innerHTML = [
+    `<div class="metric" id="subjectCard"><div class="k">Subject</div><div class="v"><span class="spinner"></span></div><div class="d">Plate-solving the star field&hellip;</div></div>`,
     metricCard("Gradient", g.spread_percent_of_background + "%", `brighter toward ${g.brighter_toward}, ${g.spread_in_noise_sigmas} sigma`, level(g.spread_percent_of_background, 8, 25)),
     metricCard("Signal / noise", m.background.snr_proxy_p99_5, "relative; compare with your history", ""),
     metricCard("Stars", s.detected ?? 0, s.note || `${s.measured} measured`, s.detected > 30 ? "good" : "warn"),
@@ -428,6 +430,26 @@ async function analyze(path, mode) {
     metricCard("Stretch", st.state, `median ${st.median_luminance}`, ""),
     metricCard("Clipping", st.saturated_pixels_percent + "%", `saturated; ${st.black_clipped_percent}% black`, level(st.saturated_pixels_percent, 0.05, 0.5)),
   ].join("");
+  identifySubject(current);
+}
+async function identifySubject(analysis) {
+  const card = () => document.getElementById("subjectCard");
+  try {
+    const { job_id } = await api("/api/identify", { analysis_id: analysis.analysis_id });
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1500));
+      if (current !== analysis || !card()) return;
+      const j = await api("/api/job/" + job_id);
+      if (j.state === "running") continue;
+      const f = j.output || {};
+      const also = (f.in_field || []).slice(1, 6).map((o) => o.name.split(" (")[0]).join(", ");
+      card().className = "metric " + (f.solved ? "good" : f.subject ? "warn" : "");
+      card().innerHTML = `<div class="k">Subject</div><div class="v">${esc(f.subject || "Unknown")}</div>
+        <div class="d">${esc(f.subject_type || "")}${also ? " &middot; also in frame: " + esc(also) : ""}<br>${f.solved ? "Identified from the star field" : esc(f.method || j.error || "")}</div>`;
+      if (!f.solved && !cfg.tools.astap) card().innerHTML += `<div class="d">Install the free <a href="https://www.hnsky.org/astap.htm" target="_blank" rel="noopener" style="color:var(--accent)">ASTAP</a> plate solver (with its D50 star database) to identify subjects from the stars themselves.</div>`;
+      return;
+    }
+  } catch (e) { if (card()) card().querySelector(".d").textContent = e.message; }
 }
 document.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => openTool(b.dataset.open));
 

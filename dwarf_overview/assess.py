@@ -46,7 +46,8 @@ siril_script: commands for siril-cli that run AFTER GraXpert, on its output. Use
 {"command": "subsky", "args": "1 -samples=20"}. Do not include load, cd or file paths; the app adds them. \
 Leave the list empty if Siril is not needed. Write for a beginner who is keen to learn, in plain language.
 
-identification: name the main target (use shotsInfo target and RA/Dec when present, and confirm from the image), and \
+identification: name the main target. When a plate solve is present it is authoritative: use its subject and \
+in_field list (positions are already worked out). Otherwise use shotsInfo target and RA/Dec and confirm from the image, and \
 list other catalogued objects visible in the frame with where they sit (the DWARF 3 telephoto frame is about \
 2.9 x 1.6 degrees). Only list objects you can actually see or that certainly fall in this field; set confidence honestly.
 
@@ -192,6 +193,7 @@ def _user_content(analysis: dict, session_note: str) -> list:
     metrics = analysis["metrics"]
     text = (
         "Measurements (JSON):\n" + json.dumps(metrics) +
+        "\n\nPlate solve / catalogue identification:\n" + (json.dumps(analysis["field"]) if analysis.get("field") else "not available") +
         "\n\nDWARF shotsInfo.json:\n" + (json.dumps(analysis.get("shot_info")) if analysis.get("shot_info") else "not found") +
         "\n\nPrevious sessions:\n" + history.context_for(analysis.get("shot_info") or {}, analysis.get("mode", "deepsky")) +
         "\n\nOwner's note for this session: " + (session_note or "none") +

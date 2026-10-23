@@ -122,6 +122,8 @@ def status() -> dict:
     out = {"graxpert": find_graxpert(), "siril": siril["gui"], "siril_cli": siril["cli"]}
     for key in PROGRAMS:
         out[key] = find_tool(key)
+    from .platesolve import find_astap
+    out["astap"] = find_astap()
     out["other_app"] = find_tool("other_app")
     out["other_app_name"] = config.load().get("other_app_name") or "Other app"
     return out

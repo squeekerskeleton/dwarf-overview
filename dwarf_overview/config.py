@@ -23,6 +23,7 @@ DEFAULTS = {
     "library_folder": "",
     "update_url": "",
     "dwarfium_web_url": "",
+    "astap_path": "",
     "dwarfium_standalone_dir": "",
 }
 

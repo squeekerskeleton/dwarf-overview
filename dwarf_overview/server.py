@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, tools, update
+from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, tools, update
 
 RESTART_EXIT_CODE = 3  # start-windows.bat relaunches the app when it exits with this code
 
@@ -149,6 +149,22 @@ class Handler(BaseHTTPRequestHandler):
                     while len(ANALYSES) > 20:
                         ANALYSES.pop(next(iter(ANALYSES)))
                 return self._json({"analysis_id": aid, **result})
+            if path == "/api/identify":
+                aid = body["analysis_id"]
+                with ANALYSES_LOCK:
+                    analysis = ANALYSES.get(aid)
+                if analysis is None:
+                    return self._json({"error": "Measure the image again first."}, 400)
+                info = analysis["metrics"].get("image", {})
+
+                def run_identify():
+                    field = platesolve.identify(analysis["path"], info.get("width", 0), info.get("height", 0),
+                                                analysis.get("shot_info") or {},
+                                                fits_y_up=info.get("format") != "FITS")
+                    analysis["field"] = field
+                    return field
+
+                return self._json({"job_id": tools.start_task(run_identify, "Plate-solving the star field")})
             if path == "/api/assess":
                 with ANALYSES_LOCK:
                     analysis = ANALYSES.get(body["analysis_id"])
@@ -157,7 +173,11 @@ class Handler(BaseHTTPRequestHandler):
                 note = body.get("note", "")
                 result, model = assess.assess(analysis, note)
                 result["siril_script_text"] = tools.build_siril_script(analysis["path"], result.get("siril_script", []))
-                assessment_id = history.add_assessment(analysis["path"], analysis.get("shot_info") or {},
+                shot_info = dict(analysis.get("shot_info") or {})
+                subject = (analysis.get("field") or {}).get("subject")
+                if subject and not history.shot_fields(shot_info)["target"]:
+                    shot_info["target"] = subject
+                assessment_id = history.add_assessment(analysis["path"], shot_info,
                                                        analysis["metrics"], result, model, note,
                                                        analysis.get("mode", "deepsky"), analysis["overview_jpeg_b64"])
                 return self._json({"assessment_id": assessment_id, "model": model, **result})

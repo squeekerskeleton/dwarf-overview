@@ -1,6 +1,6 @@
 {
-  "version": "0.3.0",
-  "notes": "New Telescope tab: full DWARF control (goto, tracking, joystick, focus, calibration, live view, live stacking, schedules) through Dwarfium, with one-click install checked against GitHub's checksum.",
-  "sha256": "5f24bac8015f2f50d38521ecbdc5a1648a7ac55971f06093943a18cc7944d95a",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.3.0.zip"
+  "version": "0.3.1",
+  "notes": "Telescope tab: full DWARF control through Dwarfium (goto, tracking, star seek, focus, live view). The Measurements panel now names the subject by plate-solving the star field (install ASTAP for this). Night mode is now a dim orange.",
+  "sha256": "d5f7c038c7fc833cb875dfd06969ba31debf8f4160f801ea83413f5db3f33ef4",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.3.1.zip"
 }

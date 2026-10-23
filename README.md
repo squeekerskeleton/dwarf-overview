@@ -10,6 +10,7 @@ A small app for your laptop that looks at a DWARF 3 image, measures what needs f
 4. Unzip this folder somewhere permanent, such as `Documents\DWARF Overview`.
 5. Double-click **`start-windows.bat`**. The first run takes a minute to set up, then your browser opens the app. Keep the black window open while you use it, and close it to stop.
 6. Click **Settings**, paste your API key, and save. The key is stored only on your laptop.
+7. **ASTAP** (free, optional but recommended). It names the subject by matching the stars in your photo. Install it from https://www.hnsky.org/astap.htm, plus the **D50** star database from the same page. Use the default install location and the app finds it.
 
 Windows may warn about the `.bat` file the first time. Choose **More info → Run anyway**.
 
@@ -53,6 +54,8 @@ The app recognizes Moon images by itself. You can also switch with the **Deep sk
 These Moon programs have no command line, so the app opens them with your file loaded and lists the exact values to set.
 
 ## What's in the photo, light and colour, and comparisons
+
+As soon as you open an image, the **Subject** card at the top of Measurements names what you're pointed at. ASTAP plate-solves the star field to find the exact patch of sky, and the app looks it up in a built-in catalogue of 2,451 galaxies, nebulae and clusters, listing anything else in the frame too. Without ASTAP, or if the stars can't be matched, it falls back to the coordinates or target name the DWARF saved, and the card says so. The catalogue comes from OpenNGC (https://github.com/mattiaverga/OpenNGC), CC-BY-SA-4.0.
 
 Every assessment also includes:
 - **What's in the photo:** the main target, the constellation it's in, a short description, and other objects visible in the frame. For the Moon, it lists the named craters and maria you can see.
@@ -102,6 +105,8 @@ Your settings, API key and history are never touched by an update.
 - StarNet star removal runs through Siril's `starnet` command, and only if you've set StarNet up inside Siril first.
 - Colour calibration with SPCC/PCC needs plate solving in Siril. The FITS from the DWARF includes the coordinates, but Siril may still ask you for the target name the first time.
 
+Night mode turns the whole app a dim orange to keep your eyes dark-adapted in the field.
+
 ## Where things are stored
 
 `%APPDATA%\DwarfOverview` holds `config.json` (settings and your API key) and `history.db` (your session log). Back up `history.db` if you reinstall Windows, because it holds everything the app has learned.
@@ -113,4 +118,5 @@ If you'd rather not save the key in a file, set a Windows environment variable n
 - **"GraXpert wasn't found"**: open Settings and paste the full path to `GraXpert.exe`.
 - **"siril-cli wasn't found"**: point Settings at `siril.exe`. `siril-cli.exe` must be in the same folder, which it is in a standard install.
 - **"Reading MP4/AVI needs opencv"**: close the app and run `start-windows.bat` again. It installs anything that's missing.
+- **Subject says "from the DWARF's target name"**: ASTAP isn't installed or couldn't match the stars. Install ASTAP and the D50 database, or set its path in Settings.
 - **Port already in use**: something else is using port 8765. Close any other copy of the app first.
