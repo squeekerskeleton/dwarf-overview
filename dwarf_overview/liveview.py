@@ -45,7 +45,8 @@ class _Reader:
             return
         cap = None
         for attempt in range(OPEN_TRIES):  # the stream takes a moment to start after the camera opens
-            params = [getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", 53), 4000, getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", 54), 5000]
+            params = [getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", 53), 4000, getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", 54), 5000,
+                      getattr(cv2, "CAP_PROP_N_THREADS", 70), min(8, os.cpu_count() or 4)]  # H.265 needs several threads
             try:
                 cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG, params)
             except TypeError:  # older OpenCV without open parameters
@@ -182,6 +183,49 @@ def frames(camera: str = "tele"):
     finally:
         r.viewers -= 1
         r.last_viewer = time.monotonic()
+
+
+MEDIAMTX_API = "http://127.0.0.1:9997"
+MEDIAMTX_HLS = "http://127.0.0.1:8888"
+
+
+def _relay_path(ip: str, camera: str) -> str | None:
+    """Dwarfium's video relay (mediamtx) path for this DWARF and camera, if it's running and set up.
+
+    The DWARF 3 sends H.265 video. Through the relay the browser plays it directly with the graphics card, as
+    Dwarfium does, which is smoother than decoding it here. Only reads the relay's settings; changes nothing."""
+    import json
+    import urllib.request
+    name = f"dwarf_{ip.replace('.', '_')}_{camera}"
+    want = f"rtsp://{ip}:554/ch{0 if camera == 'tele' else 1}/stream0"
+    try:
+        with urllib.request.urlopen(f"{MEDIAMTX_API}/v3/config/paths/get/{name}", timeout=1.5) as r:
+            source = json.loads(r.read()).get("source")
+    except (OSError, ValueError):  # not running, or no path for this DWARF
+        return None
+    if source != want or not scope._port_open("127.0.0.1", 8888, 1.0):
+        return None
+    return name
+
+
+def start_relay(camera: str = "tele") -> dict | None:
+    """Switch the camera on and hand the page the relay's player, or None when the relay isn't available."""
+    from . import control
+    ip = (config.load().get("dwarf_ip") or "").strip()
+    if not scope._is_local(ip):
+        raise LiveError("Find your DWARF first (Network tab or Plan & Control).")
+    name = _relay_path(ip, camera)
+    if not name:
+        return None
+    url = f"rtsp://{ip}:554/ch{0 if camera == 'tele' else 1}/stream0"
+    for go_live in (False, True):
+        try:
+            control.open_preview(camera, go_live=go_live)
+        except control.ControlError as e:
+            raise LiveError(f"Couldn't switch the DWARF's camera on: {e}")
+        if _wait_for_rtsp(ip, url):
+            return {"ok": True, "camera": camera, "player": f"{MEDIAMTX_HLS}/{name}/"}
+    return None
 
 
 def start(camera: str = "tele", timeout: float = 30) -> dict:

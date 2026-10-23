@@ -28,7 +28,8 @@
   .timeline div { font-size: 11px; padding: 4px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-right: 1px solid var(--bg); background: color-mix(in srgb, var(--accent2, #1f6feb) 55%, var(--panel)); }
   #liveBox { position: relative; overflow: hidden; background: #000; border-radius: 8px; aspect-ratio: 16 / 9; outline: none; }
   #liveBox:focus { box-shadow: 0 0 0 2px var(--accent); }
-  #liveImg { width: 100%; height: 100%; object-fit: contain; transform-origin: 0 0; user-select: none; -webkit-user-drag: none; }
+  #liveImg, #liveFrame { width: 100%; height: 100%; object-fit: contain; transform-origin: 0 0; user-select: none; -webkit-user-drag: none; border: 0; display: block; }
+  #liveShield { position: absolute; inset: 0; }
   #liveMsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 20px; }
   .pad { display: grid; grid-template-columns: repeat(3, 44px); gap: 4px; }
   .pad button { height: 40px; padding: 0; }
@@ -267,7 +268,7 @@
       <div class="card"><h2>Live view and moving</h2>
         <div class="row" style="margin-bottom:6px"><span class="modebar"><button id="camTele" class="on">Telephoto</button><button id="camWide">Wide</button></span>
           <button id="liveStart">Show live view</button><button id="liveStop">Hide</button><span class="caption">Scroll to zoom, double-click to reset.</span></div>
-        <div id="liveBox" tabindex="0"><img id="liveImg" alt="Live view" class="hidden"><div id="liveMsg">Live view is off.</div></div>
+        <div id="liveBox" tabindex="0"><img id="liveImg" alt="Live view" class="hidden"><iframe id="liveFrame" class="hidden" title="Live view" allow="autoplay; fullscreen"></iframe><div id="liveShield" class="hidden"></div><div id="liveMsg">Live view is off.</div></div>
         <div class="row" style="margin-top:10px;align-items:flex-start">
           <div class="pad"><span></span><button data-dir="w" title="Tilt up (W)">W &uarr;</button><span></span>
             <button data-dir="a" title="Left (A)">A &larr;</button><button id="padStop" title="Stop">&#9632;</button><button data-dir="d" title="Right (D)">D &rarr;</button>
@@ -1346,18 +1347,32 @@ $("capStop").onclick = async () => { try { await api("/api/control/capture_stop"
 
 // live view + zoom
 let liveCam = "tele", zoom = { s: 1, x: 0, y: 0 };
-function setZoom() { $("liveImg").style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})`; }
-$("camTele").onclick = () => { liveCam = "tele"; $("camTele").classList.add("on"); $("camWide").classList.remove("on"); if (!$("liveImg").classList.contains("hidden")) $("liveStart").click(); };
-$("camWide").onclick = () => { liveCam = "wide"; $("camWide").classList.add("on"); $("camTele").classList.remove("on"); if (!$("liveImg").classList.contains("hidden")) $("liveStart").click(); };
+function setZoom() { const tr = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})`; $("liveImg").style.transform = tr; $("liveFrame").style.transform = tr; }
+function liveShowing() { return !$("liveImg").classList.contains("hidden") || !$("liveFrame").classList.contains("hidden"); }
+function liveOff(msg) {
+  $("liveImg").onload = $("liveImg").onerror = $("liveFrame").onload = null;
+  $("liveImg").src = ""; $("liveFrame").src = "about:blank";
+  ["liveImg", "liveFrame", "liveShield"].forEach((id) => $(id).classList.add("hidden"));
+  $("liveMsg").classList.remove("hidden"); if (msg != null) $("liveMsg").innerHTML = msg;
+}
+$("liveShield").onclick = () => $("liveBox").focus();  // keep W/A/S/D with the page, not the player
+$("camTele").onclick = () => { liveCam = "tele"; $("camTele").classList.add("on"); $("camWide").classList.remove("on"); if (liveShowing()) $("liveStart").click(); };
+$("camWide").onclick = () => { liveCam = "wide"; $("camWide").classList.add("on"); $("camTele").classList.remove("on"); if (liveShowing()) $("liveStart").click(); };
 $("liveStart").onclick = async () => {
-  $("liveMsg").innerHTML = '<span class="spinner"></span> Switching the camera on and connecting&hellip;'; $("liveMsg").classList.remove("hidden"); $("liveImg").classList.add("hidden");
-  try { await api("/api/live/start", { camera: liveCam }); }
+  liveOff('<span class="spinner"></span> Switching the camera on and connecting&hellip;');
+  let r;
+  try { r = await api("/api/live/start", { camera: liveCam }); }
   catch (e) { $("liveMsg").innerHTML = `<span class="error">${esc(e.message)}</span>`; return; }
+  if (r.player) {  // Dwarfium's video relay: the browser plays the DWARF's video itself, smoothly
+    $("liveFrame").onload = () => { $("liveMsg").classList.add("hidden"); $("liveFrame").classList.remove("hidden"); $("liveShield").classList.remove("hidden"); };
+    $("liveFrame").src = r.player;
+    return;
+  }
   $("liveImg").onload = () => { $("liveMsg").classList.add("hidden"); $("liveImg").classList.remove("hidden"); };
   $("liveImg").onerror = () => { $("liveImg").classList.add("hidden"); $("liveMsg").classList.remove("hidden"); $("liveMsg").textContent = "The live picture stopped. Click Show live view to start it again."; };
   $("liveImg").src = `/api/live.mjpg?camera=${liveCam}&t=${TOKEN}&n=${Date.now()}`;
 };
-$("liveStop").onclick = () => { $("liveImg").src = ""; $("liveImg").classList.add("hidden"); $("liveMsg").classList.remove("hidden"); $("liveMsg").textContent = "Live view is off."; };
+$("liveStop").onclick = () => liveOff("Live view is off.");
 $("liveBox").addEventListener("wheel", (e) => {
   e.preventDefault();
   const r = $("liveBox").getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;

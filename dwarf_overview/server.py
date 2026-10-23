@@ -346,7 +346,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/scope/reboot":
                 return self._json(control.reboot())
             if path == "/api/live/start":
-                return self._json(liveview.start(str(body.get("camera") or "tele")))
+                cam = str(body.get("camera") or "tele")
+                if body.get("relay", True):
+                    relayed = liveview.start_relay(cam)
+                    if relayed:
+                        return self._json(relayed)
+                return self._json(liveview.start(cam))
             if path == "/api/diagnose/fix":
                 return self._json(diagnose.apply(str(body["action"]), str(body.get("value") or "")))
             if path == "/api/net/diagnose":

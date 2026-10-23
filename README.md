@@ -102,6 +102,7 @@ A simpler alternative to Dwarfium for a night out.
 - **Go to** points the DWARF at a target in one click. It calibrates first if it needs to, then tracks. **Copy coordinates** copies the name, RA and Dec to paste into Dwarfium or the DWARFLAB app.
 - **Camera settings.** Choose the filter, exposure, gain and frame count, or pick a recommended preset. Then click **Start capture**. When you're connected, the choices are read from your DWARF.
 - **Moving the telescope.** Click the live view, then hold **W**/**S** to tilt up or down and **A**/**D** to turn left or right. Hold **Shift** for full speed. Letting go stops the telescope, and so does losing contact. Scroll over the live view to zoom, and double-click to reset.
+- **Live view.** The DWARF 3 sends H.265 video. When Dwarfium's video relay is running (it starts with Dwarfium or the Telescope tab), live view plays through it, so the browser decodes the video with the graphics card, as Dwarfium does. Otherwise the app decodes the video itself, which uses more CPU and can look rougher.
 - **Battery, temperature and storage.** The Telescope card shows the DWARF's battery level, its temperature (and the camera sensor's, when it reports it) and free space on its card. Battery and temperature show while the app is connected; storage shows whenever the DWARF is reachable.
 - **Mount.** Choose Alt-Az for normal use or EQ for wedge mode. Alt-Az limits subs to 15 s, while EQ mode allows 30 to 60 s.
 

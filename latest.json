@@ -1,6 +1,6 @@
 {
-  "version": "0.6.5",
-  "notes": "Smoother live view: every video frame is decoded without waiting, and only the newest is sent to the page, which stops the gray smearing from the app falling behind the stream.",
-  "sha256": "eda02d0f89460f544cb1c769980e3950ce0909fd11d73adf08d35d726ed10ce3",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.5.zip"
+  "version": "0.6.6",
+  "notes": "Live view plays through Dwarfium's video relay when it's running, so the graphics card decodes the DWARF's H.265 video (smooth, no gray smearing). Otherwise the app decodes with several threads.",
+  "sha256": "4da4a053dddd3b6773e6190c6290595acf857b5992e54c075e1697dd88847cf9",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.6.zip"
 }
