@@ -70,13 +70,20 @@ Every assessment also includes:
 
 Files go to `Pictures\DWARF Library` (you can change this in Settings). Nothing on the telescope is changed or deleted.
 
-## Dwarfium
+## Telescope control (Dwarfium inside the app)
 
-[Dwarfium](https://github.com/stevejcl/dwarfium) is a free, open-source app (MIT license) for controlling the DWARF from a computer and pointing it from Stellarium.
+The **Telescope** tab gives you full control of the DWARF from the app: goto and target search, tracking, the joystick, focus, calibration, live view, live stacking and schedules. It does this by running [Dwarfium](https://github.com/stevejcl/dwarfium), a free, open-source app (MIT license) that replicates the DWARFLAB app, inside the tab.
 
-- Download the Windows installer from the **Releases** section of that page. It's the file ending in `_x64-setup.exe`.
-- The installer isn't code-signed, so Windows SmartScreen will warn you. Click **More info → Run anyway**.
-- Once it's installed, an **Open Dwarfium** button appears at the top of this app.
+1. Open the **Telescope** tab and click **Install Dwarfium**.
+   - The app downloads Dwarfium's browser edition (`Dwarfium-Win.zip`) from the official release page, which the Dwarfium README links to.
+   - It checks the download against the SHA-256 checksum GitHub publishes for that file, and refuses to unpack it if they don't match.
+   - Windows Defender scans it as usual.
+2. Click **Start Dwarfium**. A console window opens for Dwarfium's helper services. Leave it open, but you can minimise it. If Windows asks about network access for *DwarfiumProxy* or *mediamtx*, allow it on private networks only.
+3. Dwarfium appears in the tab. Under **Fleet → Add telescope**, enter the DWARF's IP address, then **Connect**.
+4. If it says *Monitoring only*, the DWARFLAB phone app is holding control. Close the phone app, or turn off **Set Current Device as Host** in it, then click **Request control**.
+5. For the first-time Bluetooth Wi-Fi setup, click **Open in its own window**, because Bluetooth doesn't work inside the tab.
+
+You can also install the Dwarfium **desktop app** from the [Windows installer on its release page](https://github.com/acocalypso/dwarfium/releases). Once it's installed, an **Open Dwarfium** button appears at the top of this app. The installer isn't code-signed, so SmartScreen will warn you. Click **More info → Run anyway**.
 
 ## Updates
 

@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, assess, config, dwarf, history, imaging, lunar, tools, update
+from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, tools, update
 
 RESTART_EXIT_CODE = 3  # start-windows.bat relaunches the app when it exits with this code
 
@@ -107,11 +107,13 @@ class Handler(BaseHTTPRequestHandler):
                 target = a["target"] or a["assessment"].get("identification", {}).get("primary_target")
                 return self._json({"target": target,
                                    "best": history.best_of_target(a["target"], a["mode"], a["id"])})
+            if url.path == "/api/dwarfium/status":
+                return self._json(dwarfium_web.status())
             if url.path == "/api/dwarf/sessions":
                 return self._json({"sessions": dwarf.list_sessions(), "library": str(dwarf.library_dir())})
             if url.path == "/api/dwarf/session":
                 return self._json(dwarf.session_files(q.get("root", ""), q.get("name", "")))
-        except (update.UpdateError, dwarf.DwarfError) as e:
+        except (update.UpdateError, dwarf.DwarfError, dwarfium_web.DwarfiumError) as e:
             return self._json({"error": str(e)}, 400)
         if url.path == "/api/browse":
             return self._json(browse(q.get("folder")))
@@ -187,6 +189,11 @@ class Handler(BaseHTTPRequestHandler):
                 root, name, files = body["root"], body["name"], list(body.get("files") or [])
                 return self._json({"job_id": tools.start_task(lambda: dwarf.download(root, name, files),
                                                               f"Copying {len(files)} file(s) from the DWARF")})
+            if path == "/api/dwarfium/install":
+                return self._json({"job_id": tools.start_task(dwarfium_web.install,
+                                                              "Downloading Dwarfium from its official GitHub release")})
+            if path == "/api/dwarfium/start":
+                return self._json(dwarfium_web.start())
             if path == "/api/update/install":
                 result = update.install()
                 _restart_soon()
@@ -208,7 +215,7 @@ class Handler(BaseHTTPRequestHandler):
                 a = history.get_assessment(int(body["assessment_id"]))
                 script = body.get("script") or a["assessment"].get("siril_script_text")
                 return self._json({"job_id": tools.run_siril_script(body.get("path") or a["file_path"], script)})
-        except (assess.AssessmentError, update.UpdateError, dwarf.DwarfError) as e:
+        except (assess.AssessmentError, update.UpdateError, dwarf.DwarfError, dwarfium_web.DwarfiumError) as e:
             return self._json({"error": str(e)}, 400)
         except (FileNotFoundError, ValueError, KeyError) as e:
             return self._json({"error": str(e)}, 400)

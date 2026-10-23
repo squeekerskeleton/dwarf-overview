@@ -22,6 +22,8 @@ DEFAULTS = {
     "dwarf_ip": "",
     "library_folder": "",
     "update_url": "",
+    "dwarfium_web_url": "",
+    "dwarfium_standalone_dir": "",
 }
 
 

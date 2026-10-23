@@ -1,6 +1,6 @@
 {
-  "version": "0.2.0",
-  "notes": "First release: deep-sky and Moon assessment, GraXpert/Siril automation, Dwarfium and DWARF Wi-Fi import, photo identification, colour overview, comparisons, built-in updates.",
-  "sha256": "d4a79883a078ca8d1e8b1574357e662390f4bf4feda573494ed88218dbd2221f",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.2.0.zip"
+  "version": "0.3.0",
+  "notes": "New Telescope tab: full DWARF control (goto, tracking, joystick, focus, calibration, live view, live stacking, schedules) through Dwarfium, with one-click install checked against GitHub's checksum.",
+  "sha256": "5f24bac8015f2f50d38521ecbdc5a1648a7ac55971f06093943a18cc7944d95a",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.3.0.zip"
 }

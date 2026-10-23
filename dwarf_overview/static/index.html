@@ -88,6 +88,7 @@
 <header>
   <h1>DWARF Overview</h1>
   <button class="tab active" data-tab="work">Assess</button>
+  <button class="tab" data-tab="scope">Telescope</button>
   <button class="tab" data-tab="dwarf">From DWARF</button>
   <button class="tab" data-tab="history">History</button>
   <span class="spacer"></span>
@@ -181,6 +182,20 @@
   </section>
 </main>
 
+<section id="scopeTab" class="hidden">
+  <div class="row" style="padding:8px 16px;border-bottom:1px solid var(--line);background:var(--panel)">
+    <b>Telescope control</b><span class="muted">powered by Dwarfium</span><span id="scopeStatus" class="muted"></span>
+    <span class="spacer" style="flex:1"></span>
+    <button id="scopeStart" class="hidden">Start Dwarfium</button>
+    <button id="scopeInstall" class="hidden">Install Dwarfium</button>
+    <button id="scopeReload">Reload</button>
+    <button id="scopePopout" title="Needed for Bluetooth Wi-Fi setup">Open in its own window</button>
+  </div>
+  <div id="scopeHelp" class="card hidden" style="margin:16px"></div>
+  <pre id="scopeLog" class="hidden" style="margin:0 16px"></pre>
+  <iframe id="scopeFrame" class="hidden" title="Dwarfium" style="width:100%;height:calc(100vh - 100px);border:0;background:#000" allow="fullscreen; bluetooth; geolocation"></iframe>
+</section>
+
 <section id="dwarfTab" class="hidden" style="padding:16px">
   <div class="card"><h2>Sessions on the telescope</h2>
     <p class="muted">Reads the DWARF over Wi-Fi, the same way Dwarfium's session browser does. Put the DWARF on your home Wi-Fi (STA mode in the DWARFLAB app) or join its hotspot, and set its IP address in Settings. Files are copied to your library; nothing on the telescope is changed.</p>
@@ -216,7 +231,8 @@
   <label for="startFolder">Start the file browser in</label><input id="startFolder">
   <div class="grid2"><div><label for="dwarfIp">DWARF IP address (for From DWARF)</label><input id="dwarfIp" placeholder="e.g. 192.168.1.42"></div>
     <div><label for="libFolder">Save DWARF downloads to</label><input id="libFolder" placeholder="Pictures\DWARF Library"></div></div>
-  <label for="dwarfiumPath">Dwarfium program (leave blank to auto-detect)</label><input id="dwarfiumPath">
+  <label for="dwarfiumPath">Dwarfium desktop app (leave blank to auto-detect)</label><input id="dwarfiumPath">
+  <label for="dwarfiumWeb">Dwarfium web address (for the Telescope tab)</label><input id="dwarfiumWeb" placeholder="http://127.0.0.1:8000">
   <label for="updateUrl">Update source (latest.json address)</label><input id="updateUrl">
   <div class="caption" id="toolStatus" style="margin-top:8px"></div>
   <div class="row" style="margin-top:14px; justify-content:flex-end"><button id="clearKey">Remove saved key</button><button id="closeSettings">Cancel</button><button class="primary" id="saveSettings">Save</button></div>
@@ -284,7 +300,7 @@ $("settingsBtn").onclick = () => {
   $("model").value = cfg.model; $("effort").value = cfg.effort; $("sirilPath").value = cfg.siril_path;
   $("gxPath").value = cfg.graxpert_path; $("startFolder").value = cfg.start_folder;
   $("ppPath").value = cfg.pipp_path; $("asPath").value = cfg.autostakkert_path; $("rxPath").value = cfg.registax_path;
-  $("dwarfIp").value = cfg.dwarf_ip; $("libFolder").value = cfg.library_folder; $("dwarfiumPath").value = cfg.dwarfium_path; $("updateUrl").value = cfg.update_url;
+  $("dwarfIp").value = cfg.dwarf_ip; $("libFolder").value = cfg.library_folder; $("dwarfiumPath").value = cfg.dwarfium_path; $("dwarfiumWeb").value = cfg.dwarfium_web_url; $("updateUrl").value = cfg.update_url;
   $("imPath").value = cfg.imppg_path; $("otherName").value = cfg.other_app_name; $("otherPath").value = cfg.other_app_path;
   const t = cfg.tools, f = (v) => v ? '<span class="ok">found</span>' : '<span class="error">not found</span>';
   $("toolStatus").innerHTML = `GraXpert: ${f(t.graxpert)} &middot; Siril: ${f(t.siril)} &middot; siril-cli: ${f(t.siril_cli)}<br>Dwarfium: ${f(t.dwarfium)} &middot; PIPP: ${f(t.pipp)} &middot; AutoStakkert: ${f(t.autostakkert)} &middot; RegiStax: ${f(t.registax)} &middot; ImPPG: ${f(t.imppg)}<br>Data folder: ${esc(cfg.data_dir)}`;
@@ -296,7 +312,7 @@ $("saveSettings").onclick = async () => {
     siril_path: $("sirilPath").value.trim(), graxpert_path: $("gxPath").value.trim(), start_folder: $("startFolder").value.trim(),
     pipp_path: $("ppPath").value.trim(), autostakkert_path: $("asPath").value.trim(), registax_path: $("rxPath").value.trim(),
     imppg_path: $("imPath").value.trim(), dwarf_ip: $("dwarfIp").value.trim(), library_folder: $("libFolder").value.trim(),
-    dwarfium_path: $("dwarfiumPath").value.trim(), update_url: $("updateUrl").value.trim(), other_app_name: $("otherName").value.trim(), other_app_path: $("otherPath").value.trim() });
+    dwarfium_path: $("dwarfiumPath").value.trim(), dwarfium_web_url: $("dwarfiumWeb").value.trim(), update_url: $("updateUrl").value.trim(), other_app_name: $("otherName").value.trim(), other_app_path: $("otherPath").value.trim() });
   $("settings").close(); loadConfig();
 };
 $("clearKey").onclick = async () => { cfg = await api("/api/config", { clear_api_key: true }); $("settings").close(); loadConfig(); };
@@ -309,6 +325,8 @@ document.querySelectorAll(".tab").forEach((b) => b.onclick = () => {
   $("workTab").classList.toggle("hidden", b.dataset.tab !== "work");
   $("historyTab").classList.toggle("hidden", b.dataset.tab !== "history");
   $("dwarfTab").classList.toggle("hidden", b.dataset.tab !== "dwarf");
+  $("scopeTab").classList.toggle("hidden", b.dataset.tab !== "scope");
+  if (b.dataset.tab === "scope") loadScope();
   if (b.dataset.tab === "history") loadHistory();
 });
 
@@ -571,6 +589,49 @@ async function loadHistory() {
       <td>${esc(r.gradient_pct)}%</td><td>${esc(r.snr)}</td><td>${r.rating ? esc(r.rating) + "/5" : '<span class="muted">none</span>'}</td><td>${esc(r.notes || r.learned_note || "")}</td></tr>`).join("")
     : '<tr><td class="muted">Nothing logged yet.</td></tr>';
 }
+
+// ---------------- telescope (Dwarfium)
+let scopeUrl = "";
+async function loadScope(waitForStart) {
+  let st;
+  try { st = await api("/api/dwarfium/status"); } catch (e) { $("scopeStatus").textContent = e.message; return; }
+  scopeUrl = st.url;
+  $("scopeStatus").textContent = st.running ? `connected to ${st.url}` : st.installed ? "installed, not running" : "not installed";
+  $("scopeStart").classList.toggle("hidden", st.running || !st.installed);
+  $("scopeInstall").classList.toggle("hidden", st.running);
+  $("scopeInstall").textContent = st.installed ? "Update Dwarfium" : "Install Dwarfium";
+  if (st.running) {
+    $("scopeHelp").classList.add("hidden"); $("scopeLog").classList.add("hidden");
+    if ($("scopeFrame").classList.contains("hidden") || !$("scopeFrame").src) $("scopeFrame").src = st.url + "/";
+    $("scopeFrame").classList.remove("hidden");
+    return;
+  }
+  $("scopeFrame").classList.add("hidden");
+  $("scopeHelp").classList.remove("hidden");
+  $("scopeHelp").innerHTML = st.installed
+    ? `<h2>Dwarfium is installed but not running</h2><p>Click <b>Start Dwarfium</b>. A console window opens for its helper services; leave it open (you can minimise it). This page connects by itself once it's up.</p>`
+    : `<h2>Set up telescope control</h2>
+       <p>This tab runs <a href="https://github.com/stevejcl/dwarfium" target="_blank" rel="noopener" style="color:var(--accent)">Dwarfium</a>, a free open-source app that does everything the DWARFLAB app does: goto and target search, tracking, joystick, focus, calibration, live view, live stacking and schedules.</p>
+       <p>Click <b>Install Dwarfium</b> to download its browser edition from the official release page. The app checks the download against the checksum GitHub publishes before unpacking it. Windows Defender also scans it as usual. Windows may ask to allow network access for <i>DwarfiumProxy</i> and <i>mediamtx</i>: allow it on private networks only.</p>
+       <p class="muted">Already run Dwarfium's standalone package somewhere else? Put its address in Settings (Dwarfium web address).</p>`;
+  if (waitForStart > 0 && !$("scopeTab").classList.contains("hidden")) setTimeout(() => loadScope(waitForStart - 1), 3000);
+}
+$("scopeReload").onclick = () => { $("scopeFrame").src = ""; loadScope(); };
+$("scopePopout").onclick = () => window.open(scopeUrl + "/", "dwarfium");
+$("scopeStart").onclick = async () => {
+  try { await api("/api/dwarfium/start", {}); $("scopeStatus").innerHTML = '<span class="spinner"></span> starting&hellip;'; loadScope(40); }
+  catch (e) { alert(e.message); }
+};
+$("scopeInstall").onclick = async () => {
+  if (!confirm("Download Dwarfium's browser edition from its official GitHub release (about 100 to 300 MB)?")) return;
+  try {
+    const { job_id } = await api("/api/dwarfium/install", {});
+    watchJob(job_id, $("scopeStatus"), $("scopeLog"), (out) => {
+      $("scopeLog").textContent += `\nInstalled ${out.version}\nChecksum ${out.sha256}\nPrograms in the package: ${out.programs.join(", ")}`;
+      loadScope();
+    });
+  } catch (e) { alert(e.message); }
+};
 
 // ---------------- from DWARF
 $("dwRefresh").onclick = async () => {
