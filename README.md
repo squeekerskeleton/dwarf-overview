@@ -143,6 +143,10 @@ A progress bar shows how far the whole run is and roughly how long is left. **PA
 
 Each step shows its progress. Nothing on the DWARF or in your library is changed. Afterwards, **Measure the result** assesses the new image, and you can delete Siril's working copies to free space.
 
+### LAST SESSION
+
+If a run doesn't finish (the app was closed or updated, the computer restarted, Stop all was pressed, or a step failed), press **LAST SESSION** at the top. It lists every unfinished run with where it stopped; **Resume** carries on from that step. Frames already copied aren't copied again, and a finished stack, crop or GraXpert result that's still on disk is kept, so a run cut off after a two-hour stack doesn't restack. Each run's progress is saved as `run.json` in its processing folder.
+
 ## Diagnose
 
 Click **Diagnose** at the top, say what's going wrong, and leave **Include a screenshot** ticked. Your browser asks which tab to share: pick the DWARF Post-Processing Hub tab. Claude then gets the screenshot plus the app's state:

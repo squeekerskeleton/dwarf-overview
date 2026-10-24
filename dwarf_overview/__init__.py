@@ -1,2 +1,2 @@
 """DWARF Post-Processing Hub: assess DWARF 3 astrophotos with Claude and plan the processing."""
-__version__ = "0.7.0"
+__version__ = "0.7.1"

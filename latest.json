@@ -1,6 +1,6 @@
 {
-  "version": "0.7.0",
-  "notes": "Renamed to DWARF Post-Processing Hub. Auto-apply now has a progress bar with time left. New PAUSE ALL button suspends Siril/GraXpert and frame copying (RESUME ALL carries on). At startup the app measures this computer (threads, speed, memory, graphics card, drive speed) and tunes Siril threads and memory, GraXpert GPU use, parallel frame copies and priority to it.",
-  "sha256": "77e4eab9c84e1bd7ab6933089f954f6a74deb876718c49c0dae2bfe90de5cb9e",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.7.0.zip"
+  "version": "0.7.1",
+  "notes": "LAST SESSION: pick up Auto-apply runs that didn't finish (app closed, updated, restarted, stopped or failed) at the step where they stopped, without recopying frames or redoing a finished stack.",
+  "sha256": "d25ad9686c4884f52bd544516c5c5341e52e95fd6746c2d7422836e8a4a33af9",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.7.1.zip"
 }

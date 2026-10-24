@@ -165,15 +165,38 @@ def _siril_args(script: Path, workdir: Path) -> list[str]:
     return [cli, "-d", str(workdir), "-s", str(script)]
 
 
+RUN_FILE = "run.json"
+
+
 class _Job:
-    def __init__(self, steps: list[str]):
+    def __init__(self, steps: list[str], folder: Path | None = None, meta: dict | None = None):
         self.id = uuid.uuid4().hex[:10]
+        self.folder, self.meta = folder, dict(meta or {})
+        self.outputs: dict[str, str] = {}
         self.job = tools.JOBS[self.id] = {"state": "running", "log": [], "output": None, "error": None,
                                           "steps": [{"label": s, "state": "waiting", "note": "", "fraction": 0.0}
                                                     for s in steps],
                                           "progress": 0.0, "started": time.time(), "eta_seconds": None}
         self.weights = list(WEIGHTS)
         self.paused_for = 0.0
+        self.save()
+
+    def save(self, status: str | None = None) -> None:
+        """Keep run.json in the session's processing folder up to date, so LAST SESSION can pick the run up
+        again after the app is closed, updated or the computer restarts."""
+        if not self.folder:
+            return
+        try:
+            self.folder.mkdir(parents=True, exist_ok=True)
+            data = {**self.meta, "job_id": self.id, "status": status or self.job["state"],
+                    "updated": time.strftime("%Y-%m-%d %H:%M:%S"), "progress": self.job["progress"],
+                    "steps": [{k: s[k] for k in ("label", "state", "note")} for s in self.job["steps"]],
+                    "outputs": self.outputs, "error": self.job.get("error")}
+            tmp = self.folder / (RUN_FILE + ".tmp")
+            tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+            tmp.replace(self.folder / RUN_FILE)
+        except OSError:
+            pass
 
     def step(self, n: int, state: str, note: str = "") -> None:
         s = self.job["steps"][n]
@@ -183,6 +206,7 @@ class _Job:
         if note:
             self.log(note)
         self._progress()
+        self.save()
 
     def part(self, n: int, fraction: float) -> None:
         """How far through step n (0 to 1)."""
@@ -249,11 +273,14 @@ STEPS = ["Find and copy the raw frames", "Siril: debayer, register, select frame
          "Siril: finish the plan and save"]
 
 
-def start(assessment_id: int, include_failed: bool = False) -> str:
+def start(assessment_id: int, include_failed: bool = False, resume: dict | None = None) -> str:
     a = history.get_assessment(int(assessment_id))
     if not a:
         raise ProcessError("Assess the photo first, so there's a plan to apply.")
     found = find_frames(a["file_path"], include_failed)
+    if resume:  # the earlier run's working files will be reused or replaced, so count their space as free
+        found["bytes_free"] += _folder_bytes(Path(found["work_folder"]) / "process")
+        found["fits"] = found["bytes_free"] > found["bytes_needed"] or bool(resume.get("outputs", {}).get("stacked"))
     if found["count"] < 3:
         where = "" if found["dwarf_reached"] else " The DWARF wasn't reachable over Wi-Fi or USB-C, so its frames couldn't be listed."
         raise ProcessError(f"Only {found['count']} raw frames were found for {found['session']}.{where}")
@@ -261,14 +288,17 @@ def start(assessment_id: int, include_failed: bool = False) -> str:
         raise ProcessError(f"Not enough room: this needs about {found['bytes_needed'] / 1e9:.0f} GB and "
                            f"{found['work_folder'][:3]} has {found['bytes_free'] / 1e9:.0f} GB free. Pick a bigger "
                            "drive for the processing folder in Settings.")
-    j = _Job(STEPS)
-    threading.Thread(target=_run, args=(j, a, found), daemon=True).start()
+    meta = {"assessment_id": int(assessment_id), "include_failed": include_failed, "session": found["session"],
+            "photo": a["file_path"], "frames": found["count"],
+            "started": (resume or {}).get("started") or time.strftime("%Y-%m-%d %H:%M:%S")}
+    j = _Job(STEPS, Path(found["work_folder"]), meta)
+    threading.Thread(target=_run, args=(j, a, found, resume), daemon=True).start()
     return j.id
 
 
-def _run(j: _Job, a: dict, found: dict) -> None:
+def _run(j: _Job, a: dict, found: dict, resume: dict | None = None) -> None:
     try:
-        out = _pipeline(j, a, found)
+        out = _pipeline(j, a, found, resume)
         if not j.stopped():
             j.job.update(state="done", output=out)
     except Exception as e:  # every failure goes back to the page
@@ -277,6 +307,7 @@ def _run(j: _Job, a: dict, found: dict) -> None:
                 if s["state"] == "running":
                     s["state"] = "failed"
             j.job.update(state="failed", error=str(e))
+    j.save()
 
 
 def _copy_frames(j: _Job, found: dict, lights: Path) -> int:
@@ -320,9 +351,24 @@ def _copy_frames(j: _Job, found: dict, lights: Path) -> int:
     return count[0]
 
 
-def _pipeline(j: _Job, a: dict, found: dict) -> dict:
+def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict:
     plan = _plan_settings(a["assessment"])
     work = Path(found["work_folder"])
+    prev_steps = (resume or {}).get("steps") or []
+    prev_out = (resume or {}).get("outputs") or {}
+
+    def reuse(n: int, key: str | None) -> str | bool | None:
+        """For LAST SESSION: a step that finished last time and whose file is still there isn't redone."""
+        if n >= len(prev_steps) or prev_steps[n].get("state") not in ("done", "skipped"):
+            return None
+        path = prev_out.get(key) if key else None
+        if key and prev_steps[n]["state"] == "done" and not (path and Path(path).exists()):
+            return None  # its file is gone: redo the step
+        j.step(n, prev_steps[n]["state"], (prev_steps[n].get("note") or "") + " (kept from the last session)")
+        if path:
+            j.outputs[key] = path
+        return path or True
+
     lights, proc = work / "lights", work / "process"
     try:
         shot = json.loads((_session_of(Path(a["file_path"]))[1] / "shotsInfo.json").read_text(encoding="utf-8"))
@@ -340,6 +386,44 @@ def _pipeline(j: _Job, a: dict, found: dict) -> dict:
     j.step(0, "done", f"{found['count']} frames ready in {lights} ({copied} copied).")
 
     # 2. restack
+    stacked = work / "result_stack.fits"
+    if reuse(1, "stacked"):
+        pass
+    else:
+        _restack(j, plan, work, proc, tune)
+        j.outputs["stacked"] = str(stacked)
+        j.step(1, "done", f"Stacked: {stacked}")
+
+    # 3. crop
+    cropped = work / "result_crop.fits"
+    if not reuse(2, "cropped"):
+        j.step(2, "running")
+        _crop(stacked, cropped, plan["crop_px"])
+        j.outputs["cropped"] = str(cropped)
+        j.step(2, "done", f"Cropped {plan['crop_px']} px off each edge.")
+
+    # 4. GraXpert
+    gx = a["assessment"].get("graxpert") or {}
+    current = cropped
+    exe = tools.find_graxpert()
+    kept = reuse(3, "graxpert")
+    if kept:
+        current = Path(kept) if isinstance(kept, str) else current
+    elif not exe:
+        j.step(3, "skipped", "GraXpert wasn't found (set it in Settings), so background extraction was skipped.")
+    else:
+        current = _graxpert(j, gx, exe, current, work, t)
+
+    # 5. plate solve + colour calibration (needs the online star catalogue; skip if it fails)
+    kept = reuse(4, "calibrated")
+    if kept:
+        current = Path(kept) if isinstance(kept, str) else current
+    else:
+        current = _calibrate(j, plan, shot, current, work, tune)
+    return _finish(j, a, plan, current, work, proc, found, tune)
+
+
+def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str]) -> None:
     j.step(1, "running", f"Keeping the best {plan['keep_percent']}% by FWHM with roundness above {plan['roundness']}; "
                          f"Winsorized rejection {plan['sigma_low']}/{plan['sigma_high']}.")
     if proc.exists():
@@ -354,52 +438,43 @@ def _pipeline(j: _Job, a: dict, found: dict) -> dict:
         "set32bits",
         f"stack r_light rej w {plan['sigma_low']} {plan['sigma_high']} -norm=addscale -output_norm -32b -out=../result_stack",
         ""]), encoding="utf-8")
+    (work / "result_stack.fits").unlink(missing_ok=True)
     code, tail = j.run(_siril_args(script, work), work, step=1,
                        phases=["convert", "register", "seqapplyreg", "stack"])
-    stacked = work / "result_stack.fits"
-    if code != 0 or not stacked.exists():
+    if code != 0 or not (work / "result_stack.fits").exists():
         raise ProcessError("Siril's restack didn't finish:\n" + tail[-1500:])
-    j.step(1, "done", f"Stacked: {stacked}")
 
-    # 3. crop
-    j.step(2, "running")
-    cropped = work / "result_crop.fits"
-    _crop(stacked, cropped, plan["crop_px"])
-    j.step(2, "done", f"Cropped {plan['crop_px']} px off each edge.")
 
-    # 4. GraXpert
-    gx = a["assessment"].get("graxpert") or {}
-    current = cropped
-    exe = tools.find_graxpert()
-    if not exe:
-        j.step(3, "skipped", "GraXpert wasn't found (set it in Settings), so background extraction was skipped.")
-    else:
-        j.step(3, "running")
-        corr = gx.get("correction") or "Subtraction"
-        smooth = float(gx.get("smoothing") if gx.get("smoothing") is not None else 0.2)
-        gpu_args = ["-gpu", "true" if t["graxpert_gpu"] else "false"]
-        args = [exe, str(current), "-cli", "-cmd", "background-extraction", "-correction", corr,
-                "-smoothing", f"{smooth:.2f}", "-output", str(work / "result_bg")]
-        code, tail = j.run(args + gpu_args, work, 3600, step=3, phases=["background"])
-        if code != 0:  # an older GraXpert without the -gpu option
+def _graxpert(j: _Job, gx: dict, exe: str, current: Path, work: Path, t: dict) -> Path:
+    j.step(3, "running")
+    corr = gx.get("correction") or "Subtraction"
+    smooth = float(gx.get("smoothing") if gx.get("smoothing") is not None else 0.2)
+    gpu_args = ["-gpu", "true" if t["graxpert_gpu"] else "false"]
+    args = [exe, str(current), "-cli", "-cmd", "background-extraction", "-correction", corr,
+            "-smoothing", f"{smooth:.2f}", "-output", str(work / "result_bg")]
+    code, tail = j.run(args + gpu_args, work, 3600, step=3, phases=["background"])
+    if code != 0:  # an older GraXpert without the -gpu option
+        code, tail = j.run(args, work, 3600)
+    bg = tools._newest_with_stem(work, "result_bg")
+    if code != 0 or not bg:
+        raise ProcessError("GraXpert's background extraction failed:\n" + tail[-1200:])
+    current = Path(bg)
+    note = f"{corr}, smoothing {smooth:.2f}."
+    if gx.get("run_denoise"):
+        args = [exe, str(current), "-cli", "-cmd", "denoising", "-strength",
+                f"{float(gx.get('denoise_strength') or 0.5):.2f}", "-output", str(work / "result_dn")]
+        code, tail = j.run(args + gpu_args + ["-batch_size", str(t["graxpert_batch"])], work, 3600)
+        if code != 0:
             code, tail = j.run(args, work, 3600)
-        bg = tools._newest_with_stem(work, "result_bg")
-        if code != 0 or not bg:
-            raise ProcessError("GraXpert's background extraction failed:\n" + tail[-1200:])
-        current = Path(bg)
-        note = f"{corr}, smoothing {smooth:.2f}."
-        if gx.get("run_denoise"):
-            args = [exe, str(current), "-cli", "-cmd", "denoising", "-strength",
-                    f"{float(gx.get('denoise_strength') or 0.5):.2f}", "-output", str(work / "result_dn")]
-            code, tail = j.run(args + gpu_args + ["-batch_size", str(t["graxpert_batch"])], work, 3600)
-            if code != 0:
-                code, tail = j.run(args, work, 3600)
-            dn = tools._newest_with_stem(work, "result_dn")
-            if code == 0 and dn:
-                current, note = Path(dn), note + " AI denoise too."
-        j.step(3, "done", note)
+        dn = tools._newest_with_stem(work, "result_dn")
+        if code == 0 and dn:
+            current, note = Path(dn), note + " AI denoise too."
+    j.outputs["graxpert"] = str(current)
+    j.step(3, "done", note)
+    return current
 
-    # 5. plate solve + colour calibration (needs the online star catalogue; skip if it fails)
+
+def _calibrate(j: _Job, plan: dict, shot: dict, current: Path, work: Path, tune: list[str]) -> Path:
     j.step(4, "running")
     from .platesolve import hint_from_shot_info
     hint = hint_from_shot_info(shot)
@@ -411,11 +486,16 @@ def _pipeline(j: _Job, a: dict, found: dict) -> dict:
     code, tail = j.run(_siril_args(cal, work), work, 1800)
     if code == 0 and (work / "result_calibrated.fits").exists():
         current = work / "result_calibrated.fits"
+        j.outputs["calibrated"] = str(current)
         j.step(4, "done", "Plate solved and colour calibrated.")
     else:
         j.step(4, "skipped", "Plate solve or colour calibration didn't work (it needs internet for the star "
                              "catalogue), so colours were left as they are. Siril said: " +
                  (tail.strip().splitlines() or [""])[-1][:200])
+    return current
+
+
+def _finish(j: _Job, a: dict, plan: dict, current: Path, work: Path, proc: Path, found: dict, tune: list[str]) -> dict:
 
     # 6. the rest of the plan
     j.step(5, "running")
@@ -454,6 +534,7 @@ def _pipeline(j: _Job, a: dict, found: dict) -> dict:
         notes.append("ran " + ", ".join(c["command"] for c in extra))
     msg = "; ".join(notes)
     j.step(5, "done", msg[:1].upper() + msg[1:] + ".")
+    j.outputs["final"] = str(final)
     return {"final": str(final), "linear": str(work / "result_linear.fits"), "folder": str(work),
             "frames": found["count"], "cleanup_bytes": _folder_bytes(proc)}
 
@@ -486,3 +567,47 @@ def cleanup(folder: str) -> dict:
     freed = _folder_bytes(proc)
     shutil.rmtree(proc, ignore_errors=True)
     return {"freed_bytes": freed}
+
+
+# ---------------------------------------------------------------- LAST SESSION
+
+def unfinished() -> list[dict]:
+    """Auto-apply runs that didn't finish (stopped, failed, or cut off by closing the app or an update),
+    newest first, plus any run still going."""
+    root = work_root()
+    out = []
+    if not root.is_dir():
+        return out
+    for f in root.glob(f"*/{RUN_FILE}"):
+        try:
+            r = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        live = tools.JOBS.get(r.get("job_id") or "")
+        if live and live["state"] == "running":
+            r["status"] = "running"
+        elif r.get("status") == "running":
+            r["status"] = "interrupted"  # the app was closed, updated or the computer restarted mid-run
+        if r.get("status") == "done":
+            continue
+        nxt = next((s["label"] for s in r.get("steps", []) if s["state"] not in ("done", "skipped")), None)
+        out.append({"folder": str(f.parent), "session": r.get("session"), "photo": r.get("photo"),
+                    "assessment_id": r.get("assessment_id"), "status": r["status"], "progress": r.get("progress", 0),
+                    "updated": r.get("updated"), "next_step": nxt, "error": r.get("error"), "job_id": r.get("job_id"),
+                    "frames": r.get("frames")})
+    return sorted(out, key=lambda r: r.get("updated") or "", reverse=True)
+
+
+def resume(folder: str) -> str:
+    """Carry on a run from its first unfinished step. A run that's still going is just reattached."""
+    work = Path(folder).resolve()
+    if work_root().resolve() not in work.parents:
+        raise ProcessError("That isn't a processing folder.")
+    try:
+        r = json.loads((work / RUN_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise ProcessError("That run's record (run.json) couldn't be read.")
+    live = tools.JOBS.get(r.get("job_id") or "")
+    if live and live["state"] == "running":
+        return r["job_id"]
+    return start(int(r["assessment_id"]), bool(r.get("include_failed")), resume=r)

@@ -137,9 +137,19 @@
   <button id="diagBtn" title="Show Claude what you're seeing and get it fixed">Diagnose</button>
   <button id="settingsBtn">Settings</button>
   <button id="scanConnBtn" class="primary" title="Search for the DWARF until it's found (up to 30 seconds), then connect">SCAN &amp; CONNECT</button>
+  <button id="lastBtn" title="Pick up an Auto-apply run that didn't finish, at the step where it stopped">LAST SESSION</button>
   <button id="pauseAll" class="stopall" style="background:#8a6d1a" title="Pause the programs the app is running (Siril, GraXpert) and frame copying; press again to resume">PAUSE ALL</button>
   <button id="stopAll" class="stopall" title="Stop the telescope moving, tracking, capturing and focusing, and stop any GraXpert or Siril run">Stop all</button>
 </header>
+<dialog id="lastDlg" style="width:min(820px,95vw)"><h2 style="margin-top:0">Last session</h2>
+  <p class="caption">Auto-apply runs that didn't finish. Resume carries on from the step where each one stopped; finished steps whose files are still there aren't redone, and frames already copied aren't copied again.</p>
+  <div id="lastList"></div>
+  <div id="lastFrames" class="caption" style="margin-top:8px"></div>
+  <div id="lastProg" class="hidden" style="margin-top:8px"><div class="row" style="justify-content:space-between"><b id="lastPct">0%</b><span class="caption" id="lastEta"></span></div>
+    <div class="hwbar" style="height:12px"><span id="lastBar" style="width:0%"></span></div></div>
+  <div id="lastSteps" style="margin-top:6px"></div>
+  <pre id="lastLog" class="hidden" style="max-height:160px;overflow:auto"></pre>
+  <div class="row" style="justify-content:flex-end;margin-top:12px"><button id="lastClose">Close (the run keeps going)</button></div></dialog>
 <dialog id="stopDlg"><h2 style="margin-top:0">Stop all</h2><div id="stopOut"></div>
   <div class="row" style="justify-content:flex-end;margin-top:12px"><button id="stopClose">Close</button></div></dialog>
 
@@ -754,45 +764,77 @@ async function autoFrames() {
 }
 $("autoFailed").onchange = autoFrames;
 function fmtDur(s) { s = Math.round(s); return s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.round(s % 3600 / 60)} min` : s >= 60 ? `${Math.round(s / 60)} min` : `${s} s`; }
-function drawAutoProgress(j) {
-  $("autoProg").classList.remove("hidden");
+function drawAutoProgress(j, px = "auto") {
+  $(px + "Prog").classList.remove("hidden");
   const p = j.state === "done" ? 100 : j.progress || 0;
-  $("autoBar").style.width = p + "%"; $("autoPct").textContent = Math.floor(p) + "%";
+  $(px + "Bar").style.width = p + "%"; $(px + "Pct").textContent = Math.floor(p) + "%";
   const cur = (j.steps || []).find((s) => s.state === "running");
-  $("autoEta").textContent = j.state !== "running" ? (j.state === "done" ? `Finished in ${fmtDur(Date.now() / 1000 - j.started)}` : "")
+  $(px + "Eta").textContent = j.state !== "running" ? (j.state === "done" ? `Finished in ${fmtDur(Date.now() / 1000 - j.started)}` : "")
     : (j.paused || $("pauseAll").textContent === "RESUME ALL") ? "Paused" : `${cur ? cur.label + " · " : ""}${j.eta_seconds != null ? "about " + fmtDur(j.eta_seconds) + " left" : "working out time left…"}`;
 }
-function drawAutoSteps(steps) {
+function drawAutoSteps(steps, px = "auto") {
   const icon = { waiting: "○", running: '<span class="spinner"></span>', done: '<span class="ok">✓</span>', skipped: '<span class="warn">–</span>', failed: '<span class="error">✗</span>' };
-  $("autoSteps").innerHTML = steps.map((s) => `<div>${icon[s.state] || ""} ${esc(s.label)}${s.note ? ` <span class="caption">${esc(s.note)}</span>` : ""}</div>`).join("");
+  $(px + "Steps").innerHTML = steps.map((s) => `<div>${icon[s.state] || ""} ${esc(s.label)}${s.note ? ` <span class="caption">${esc(s.note)}</span>` : ""}</div>`).join("");
+}
+// Follow an Auto-apply run on the Assess tab (px "auto") or in the LAST SESSION window (px "last").
+async function watchAuto(job_id, px = "auto") {
+  $(px + "Log").classList.remove("hidden");
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const j = await api("/api/job/" + job_id);
+    drawAutoSteps(j.steps || [], px); drawAutoProgress(j, px); $(px + "Log").textContent = j.log.join("\n"); $(px + "Log").scrollTop = 1e9;
+    if (j.state === "running") continue;
+    const box = $(px + "Frames");
+    if (j.state === "done") {
+      const o = j.output; latestOutput = o.final;
+      box.innerHTML = `<span class="ok">Done.</span> ${o.frames} frames processed. Result: ${esc(o.final)} `;
+      const m = document.createElement("button"); m.textContent = "Measure the result";
+      m.onclick = () => { if ($("lastDlg").open) $("lastDlg").close(); document.querySelector('.tab[data-tab="work"]').click(); analyze(o.final); };
+      box.appendChild(m);
+      if (o.cleanup_bytes) {
+        const c = document.createElement("button"); c.textContent = `Delete Siril's working files (${gb(o.cleanup_bytes)})`; c.style.marginLeft = "6px";
+        c.onclick = async () => { if (!confirm("Delete Siril's working copies? The raw frames and the results are kept.")) return;
+          const r = await api("/api/autoprocess/cleanup", { folder: o.folder }); c.replaceWith(document.createTextNode(` Freed ${gb(r.freed_bytes)}.`)); };
+        box.appendChild(c);
+      }
+    } else box.innerHTML = `<span class="error">${esc(j.error || "Stopped.")}</span> LAST SESSION can pick it up again from this step.`;
+    return j;
+  }
 }
 $("autoRun").onclick = async () => {
   if (!confirm("Auto-apply the plan? This copies the session's raw frames to the processing folder and restacks them; it can take an hour or more for hundreds of frames.")) return;
   $("autoRun").disabled = true;
   try {
     const { job_id } = await api("/api/autoprocess/start", { assessment_id: assessmentId, include_failed: $("autoFailed").checked });
-    $("autoLog").classList.remove("hidden");
-    for (;;) {
-      await new Promise((r) => setTimeout(r, 2000));
-      const j = await api("/api/job/" + job_id);
-      drawAutoSteps(j.steps || []); drawAutoProgress(j); $("autoLog").textContent = j.log.join("\n"); $("autoLog").scrollTop = 1e9;
-      if (j.state === "running") continue;
-      if (j.state === "done") {
-        const o = j.output; latestOutput = o.final;
-        $("autoFrames").innerHTML = `<span class="ok">Done.</span> ${o.frames} frames processed. Result: ${esc(o.final)} `;
-        const m = document.createElement("button"); m.textContent = "Measure the result"; m.onclick = () => analyze(o.final); $("autoFrames").appendChild(m);
-        if (o.cleanup_bytes) {
-          const c = document.createElement("button"); c.textContent = `Delete Siril's working files (${gb(o.cleanup_bytes)})`; c.style.marginLeft = "6px";
-          c.onclick = async () => { if (!confirm("Delete Siril's working copies? The raw frames and the results are kept.")) return;
-            const r = await api("/api/autoprocess/cleanup", { folder: o.folder }); c.replaceWith(document.createTextNode(` Freed ${gb(r.freed_bytes)}.`)); };
-          $("autoFrames").appendChild(c);
-        }
-      } else $("autoFrames").innerHTML = `<span class="error">${esc(j.error || "Stopped.")}</span>`;
-      break;
-    }
+    await watchAuto(job_id, "auto");
   } catch (e) { $("autoFrames").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
   $("autoRun").disabled = false;
 };
+
+// ---------------- LAST SESSION: pick up Auto-apply runs that didn't finish
+const RUN_STATUS = { running: "still running", interrupted: "cut off (app closed, updated or restarted)", failed: "stopped with an error", stopped: "stopped by Stop all" };
+async function openLast() {
+  $("lastList").innerHTML = '<span class="spinner"></span> Looking for unfinished sessions&hellip;';
+  ["lastProg", "lastLog"].forEach((id) => $(id).classList.add("hidden")); $("lastSteps").innerHTML = ""; $("lastFrames").innerHTML = "";
+  $("lastDlg").showModal();
+  let runs;
+  try { runs = await api("/api/autoprocess/unfinished"); } catch (e) { $("lastList").innerHTML = `<span class="error">${esc(e.message)}</span>`; return; }
+  if (!runs.length) { $("lastList").innerHTML = '<p class="muted">No unfinished sessions. Every Auto-apply run so far has finished.</p>'; return; }
+  $("lastList").innerHTML = runs.map((r, n) => `<div class="step" style="margin-bottom:8px"><div class="row"><b>${esc(r.session || "Session")}</b>
+      <span class="chip">${esc(RUN_STATUS[r.status] || r.status)}</span><span class="caption">${Math.floor(r.progress || 0)}% · last update ${esc(r.updated || "")}</span>
+      <button class="primary" data-resume="${n}" style="margin-left:auto">${r.status === "running" ? "Show" : "Resume"}</button></div>
+      <div class="caption">${r.next_step ? "Picks up at: " + esc(r.next_step) : ""}${r.frames ? ` · ${r.frames} frames` : ""}${r.error ? ` · last error: ${esc(r.error.split("\n")[0])}` : ""}</div></div>`).join("");
+  $("lastList").querySelectorAll("[data-resume]").forEach((b) => b.onclick = async () => {
+    const r = runs[+b.dataset.resume];
+    $("lastList").querySelectorAll("button").forEach((x) => x.disabled = true);
+    $("lastFrames").innerHTML = `<span class="spinner"></span> ${r.status === "running" ? "Following" : "Picking up"} ${esc(r.session)}&hellip;`;
+    try { const { job_id } = await api("/api/autoprocess/resume", { folder: r.folder }); await watchAuto(job_id, "last"); }
+    catch (e) { $("lastFrames").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+    $("lastList").querySelectorAll("button").forEach((x) => x.disabled = false);
+  });
+}
+$("lastBtn").onclick = openLast;
+$("lastClose").onclick = () => $("lastDlg").close();
 
 $("gxRun").onclick = async () => {
   try {

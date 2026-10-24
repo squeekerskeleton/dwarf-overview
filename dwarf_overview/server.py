@@ -187,6 +187,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": str(e)}, 400)
         if url.path == "/api/browse":
             return self._json(browse(q.get("folder")))
+        if url.path == "/api/autoprocess/unfinished":
+            return self._json(autoprocess.unfinished())
         if url.path == "/api/history":
             return self._json(history.list_recent(100))
         if url.path.startswith("/api/assessment/"):
@@ -399,6 +401,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(found)
             if path == "/api/autoprocess/start":
                 return self._json({"job_id": autoprocess.start(int(body["assessment_id"]), bool(body.get("include_failed")))})
+            if path == "/api/autoprocess/resume":
+                return self._json({"job_id": autoprocess.resume(str(body["folder"]))})
             if path == "/api/autoprocess/cleanup":
                 return self._json(autoprocess.cleanup(str(body["folder"])))
             if path == "/api/run/siril":
