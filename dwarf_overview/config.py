@@ -33,6 +33,7 @@ DEFAULTS = {
     "auto_apply": True,
     "dwarf_ip": "",
     "library_folder": "",
+    "work_folder": "",
     "update_url": "",
     "dwarfium_web_url": "",
     "astap_path": "",

@@ -124,6 +124,19 @@ If the DWARF isn't on your Wi-Fi, there are backup ways to reach it:
 - **Bluetooth**, in Chrome or Edge. It shows which network the DWARF is on and its address, and can ask it to rejoin its saved Wi-Fi. These are the same setup messages the DWARFLAB app and Dwarfium use. Bluetooth can't carry control or pictures. Close the DWARFLAB phone app first, since only one device can connect at a time.
 - **USB-C.** The tab shows when the DWARF's drive is plugged in. USB-C carries files only.
 
+## Auto-apply a processing plan
+
+After **Assess**, the Processing plan has an **Auto-apply plan** button. It shows how many raw frames the session has (for example "915 frames found") and where they are: the laptop library, the processing folder, or the DWARF itself over USB-C or Wi-Fi. Frames the DWARF rejected are left out unless you tick **Include frames the DWARF rejected**. Then it:
+
+1. copies the missing frames into the **processing folder** (Settings), after checking there's room. Hundreds of frames need tens of GB, so pick a big drive, ideally an SSD;
+2. restacks them in Siril: debayer, 2-pass registration, keeps the best frames by FWHM and roundness as the plan says, Winsorized rejection, 32-bit FITS;
+3. crops the stacking edges;
+4. runs GraXpert background extraction (and AI denoise if the plan asks for it);
+5. plate solves and colour calibrates in Siril (this needs internet for the star catalogue, so it's skipped with a note at a dark site);
+6. removes green only if the plan says to, runs the plan's other Siril commands, and saves `result_final` as FITS, TIFF and JPG.
+
+Each step shows its progress. Nothing on the DWARF or in your library is changed. Afterwards, **Measure the result** assesses the new image, and you can delete Siril's working copies to free space.
+
 ## Diagnose
 
 Click **Diagnose** at the top, say what's going wrong, and leave **Include a screenshot** ticked. Your browser asks which tab to share: pick the DWARF Overview tab. Claude then gets the screenshot plus the app's state:

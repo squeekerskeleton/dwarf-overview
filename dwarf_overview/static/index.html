@@ -171,7 +171,15 @@
       <div class="card"><div class="row"><span class="score" id="score"></span><div id="summary" style="flex:1"></div></div><div id="issues" style="margin-top:8px"></div></div>
       <div class="card"><h2>What's in the photo</h2><div id="ident"></div></div>
       <div class="card"><h2>Light and colour (spectral overview)</h2><div id="spectral"></div></div>
-      <div class="card"><h2>Processing plan</h2><div id="steps"></div></div>
+      <div class="card"><h2>Processing plan</h2>
+        <div id="autoBox" style="margin-bottom:10px;padding:10px;border:1px solid var(--accent);border-radius:8px">
+          <div class="row"><button class="primary" id="autoRun">Auto-apply plan</button>
+            <label style="display:inline-flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="autoFailed" style="width:auto"> Include frames the DWARF rejected</label></div>
+          <div id="autoFrames" class="caption">Restacks every raw frame of this session, then runs each step below. Your originals are never changed.</div>
+          <div id="autoSteps" style="margin-top:6px"></div>
+          <pre id="autoLog" class="hidden" style="max-height:160px;overflow:auto"></pre>
+        </div>
+        <div id="steps"></div></div>
       <div class="card" id="compareCard">
         <h2>How it compares</h2>
         <p class="muted" id="cmpIntro"></p>
@@ -383,6 +391,7 @@
   <label for="startFolder">Start the file browser in</label><input id="startFolder">
   <div class="grid2"><div><label for="dwarfIp">DWARF IP address (Find my DWARF fills this in)</label><input id="dwarfIp" placeholder="e.g. 192.168.1.42"></div>
     <div><label for="libFolder">Save DWARF downloads to</label><input id="libFolder" placeholder="Pictures\DWARF Library"></div></div>
+  <label for="workFolder">Processing folder (raw frames and Auto-apply results; needs lots of room, an SSD is fastest)</label><input id="workFolder" placeholder="e.g. E:\DWARF Processing">
   <div class="grid2"><div><label for="siteLat">Your site's latitude (for Dwarfium)</label><input id="siteLat" placeholder="e.g. 48.77"></div>
     <div><label for="siteLon">longitude (west is negative)</label><input id="siteLon" placeholder="e.g. -104.56"></div></div>
   <div class="row" style="margin-top:6px"><input id="siteName" placeholder="Site name, e.g. Plentywood, MT" style="flex:1"><button id="siteHere" type="button">Use this laptop's location</button></div><span id="siteStatus" class="caption"></span>
@@ -463,7 +472,7 @@ $("settingsBtn").onclick = () => {
   $("model").value = cfg.model; $("effort").value = cfg.effort; $("sirilPath").value = cfg.siril_path;
   $("gxPath").value = cfg.graxpert_path; $("startFolder").value = cfg.start_folder;
   $("ppPath").value = cfg.pipp_path; $("asPath").value = cfg.autostakkert_path; $("rxPath").value = cfg.registax_path;
-  $("dwarfIp").value = cfg.dwarf_ip; $("siteLat").value = cfg.site_lat; $("siteLon").value = cfg.site_lon; $("siteName").value = cfg.site_name || ""; $("projFolder").value = cfg.projects_folder || ""; drawSwatches(); $("siteStatus").textContent = ""; $("libFolder").value = cfg.library_folder; $("dwarfiumPath").value = cfg.dwarfium_path; $("astapPath").value = cfg.astap_path; $("dwarfiumWeb").value = cfg.dwarfium_web_url; $("updateUrl").value = cfg.update_url;
+  $("dwarfIp").value = cfg.dwarf_ip; $("siteLat").value = cfg.site_lat; $("siteLon").value = cfg.site_lon; $("siteName").value = cfg.site_name || ""; $("projFolder").value = cfg.projects_folder || ""; drawSwatches(); $("siteStatus").textContent = ""; $("libFolder").value = cfg.library_folder; $("workFolder").value = cfg.work_folder || ""; $("dwarfiumPath").value = cfg.dwarfium_path; $("astapPath").value = cfg.astap_path; $("dwarfiumWeb").value = cfg.dwarfium_web_url; $("updateUrl").value = cfg.update_url;
   $("imPath").value = cfg.imppg_path; $("otherName").value = cfg.other_app_name; $("otherPath").value = cfg.other_app_path;
   const t = cfg.tools, f = (v) => v ? '<span class="ok">found</span>' : '<span class="error">not found</span>';
   $("toolStatus").innerHTML = `GraXpert: ${f(t.graxpert)} &middot; Siril: ${f(t.siril)} &middot; siril-cli: ${f(t.siril_cli)}<br>ASTAP: ${f(t.astap)} &middot; Dwarfium: ${f(t.dwarfium)} &middot; PIPP: ${f(t.pipp)} &middot; AutoStakkert: ${f(t.autostakkert)} &middot; RegiStax: ${f(t.registax)} &middot; ImPPG: ${f(t.imppg)}<br>Data folder: ${esc(cfg.data_dir)}`;
@@ -474,7 +483,7 @@ $("saveSettings").onclick = async () => {
   cfg = await api("/api/config", { api_key: $("apiKey").value, model: $("model").value.trim(), effort: $("effort").value,
     siril_path: $("sirilPath").value.trim(), graxpert_path: $("gxPath").value.trim(), start_folder: $("startFolder").value.trim(),
     pipp_path: $("ppPath").value.trim(), autostakkert_path: $("asPath").value.trim(), registax_path: $("rxPath").value.trim(),
-    imppg_path: $("imPath").value.trim(), dwarf_ip: $("dwarfIp").value.trim(), site_lat: $("siteLat").value.trim(), site_lon: $("siteLon").value.trim(), site_name: $("siteName").value.trim(), projects_folder: $("projFolder").value.trim(), theme_primary: themePick.primary, theme_secondary: themePick.secondary, library_folder: $("libFolder").value.trim(),
+    imppg_path: $("imPath").value.trim(), dwarf_ip: $("dwarfIp").value.trim(), site_lat: $("siteLat").value.trim(), site_lon: $("siteLon").value.trim(), site_name: $("siteName").value.trim(), projects_folder: $("projFolder").value.trim(), theme_primary: themePick.primary, theme_secondary: themePick.secondary, library_folder: $("libFolder").value.trim(), work_folder: $("workFolder").value.trim(),
     dwarfium_path: $("dwarfiumPath").value.trim(), astap_path: $("astapPath").value.trim(), dwarfium_web_url: $("dwarfiumWeb").value.trim(), update_url: $("updateUrl").value.trim(), other_app_name: $("otherName").value.trim(), other_app_path: $("otherPath").value.trim() });
   $("settings").close(); loadConfig();
 };
@@ -657,6 +666,10 @@ function renderAssessment() {
       ${s.settings.length ? `<table class="settings-table">${s.settings.map((x) => `<tr><td>${esc(x.name)}</td><td><b>${esc(x.value)}</b></td></tr>`).join("")}</table>` : ""}
       <div class="caption">${esc(s.why)}</div></div>`).join("");
   $("steps").querySelectorAll("[data-step-open]").forEach((b) => b.onclick = () => openTool(b.dataset.stepOpen));
+  const deep = !current || current.mode !== "moon";
+  $("autoBox").classList.toggle("hidden", !deep);
+  $("autoSteps").innerHTML = ""; $("autoLog").classList.add("hidden");
+  if (deep) autoFrames();
   const gx = a.graxpert;
   $("gxBg").checked = gx.run_background; $("gxDn").checked = gx.run_denoise; $("gxCorr").value = gx.correction;
   $("gxSmooth").value = gx.smoothing; $("gxStr").value = gx.denoise_strength;
@@ -690,6 +703,52 @@ function offerReanalyze(statusEl, out) {
   const b = document.createElement("button"); b.textContent = "Measure the result"; b.style.marginLeft = "8px";
   b.onclick = () => analyze(out); statusEl.appendChild(b);
 }
+// ---------------- auto-apply the processing plan
+const gb = (b) => (b / 1e9).toFixed(b < 1e10 ? 1 : 0) + " GB";
+async function autoFrames() {
+  $("autoFrames").innerHTML = '<span class="spinner"></span> Looking for this session\'s raw frames (laptop, processing folder, DWARF)&hellip;';
+  try {
+    const f = await api("/api/autoprocess/frames", { assessment_id: assessmentId, include_failed: $("autoFailed").checked });
+    $("autoFrames").innerHTML = `<b>${f.count} frames found</b>${f.failed ? ` (${f.failed} the DWARF rejected)` : ""} for ${esc(f.session)}, from ${esc(f.sources.join(", ") || "nowhere")}. ` +
+      (f.bytes_to_copy ? `${gb(f.bytes_to_copy)} to copy. ` : "") + `Needs about ${gb(f.bytes_needed)}; ${gb(f.bytes_free)} free in ${esc(f.work_folder)}.` +
+      (f.fits ? "" : ` <span class="error">Not enough room: choose a bigger drive for the processing folder in Settings.</span>`) +
+      (!f.dwarf_reached && f.count < 3 ? ` <span class="warn">The DWARF isn't reachable, so its frames can't be listed. Switch it on (or plug in USB-C).</span>` : "");
+    $("autoRun").disabled = !f.fits || f.count < 3;
+  } catch (e) { $("autoFrames").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+}
+$("autoFailed").onchange = autoFrames;
+function drawAutoSteps(steps) {
+  const icon = { waiting: "○", running: '<span class="spinner"></span>', done: '<span class="ok">✓</span>', skipped: '<span class="warn">–</span>', failed: '<span class="error">✗</span>' };
+  $("autoSteps").innerHTML = steps.map((s) => `<div>${icon[s.state] || ""} ${esc(s.label)}${s.note ? ` <span class="caption">${esc(s.note)}</span>` : ""}</div>`).join("");
+}
+$("autoRun").onclick = async () => {
+  if (!confirm("Auto-apply the plan? This copies the session's raw frames to the processing folder and restacks them; it can take an hour or more for hundreds of frames.")) return;
+  $("autoRun").disabled = true;
+  try {
+    const { job_id } = await api("/api/autoprocess/start", { assessment_id: assessmentId, include_failed: $("autoFailed").checked });
+    $("autoLog").classList.remove("hidden");
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const j = await api("/api/job/" + job_id);
+      drawAutoSteps(j.steps || []); $("autoLog").textContent = j.log.join("\n"); $("autoLog").scrollTop = 1e9;
+      if (j.state === "running") continue;
+      if (j.state === "done") {
+        const o = j.output; latestOutput = o.final;
+        $("autoFrames").innerHTML = `<span class="ok">Done.</span> ${o.frames} frames processed. Result: ${esc(o.final)} `;
+        const m = document.createElement("button"); m.textContent = "Measure the result"; m.onclick = () => analyze(o.final); $("autoFrames").appendChild(m);
+        if (o.cleanup_bytes) {
+          const c = document.createElement("button"); c.textContent = `Delete Siril's working files (${gb(o.cleanup_bytes)})`; c.style.marginLeft = "6px";
+          c.onclick = async () => { if (!confirm("Delete Siril's working copies? The raw frames and the results are kept.")) return;
+            const r = await api("/api/autoprocess/cleanup", { folder: o.folder }); c.replaceWith(document.createTextNode(` Freed ${gb(r.freed_bytes)}.`)); };
+          $("autoFrames").appendChild(c);
+        }
+      } else $("autoFrames").innerHTML = `<span class="error">${esc(j.error || "Stopped.")}</span>`;
+      break;
+    }
+  } catch (e) { $("autoFrames").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+  $("autoRun").disabled = false;
+};
+
 $("gxRun").onclick = async () => {
   try {
     const { job_id } = await api("/api/run/graxpert", { assessment_id: assessmentId, run_background: $("gxBg").checked, run_denoise: $("gxDn").checked,

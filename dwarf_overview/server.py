@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update, control, planner, projects, setupcheck, liveview, learn, netcheck, diagnose
+from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update, control, planner, projects, setupcheck, liveview, learn, netcheck, diagnose, autoprocess
 
 RESTART_EXIT_CODE = 3  # start-windows.bat relaunches the app when it exits with this code
 
@@ -384,12 +384,23 @@ class Handler(BaseHTTPRequestHandler):
                 gx.update({k: body[k] for k in ("smoothing", "denoise_strength", "correction", "run_background",
                                                  "run_denoise") if k in body})
                 return self._json({"job_id": tools.run_graxpert(body.get("path") or a["file_path"], gx)})
+            if path == "/api/autoprocess/frames":
+                a = history.get_assessment(int(body["assessment_id"]))
+                if not a:
+                    raise autoprocess.ProcessError("Assess the photo first.")
+                found = autoprocess.find_frames(a["file_path"], bool(body.get("include_failed")))
+                found["sources"] = sorted({f["source"] for f in found.pop("frames")})
+                return self._json(found)
+            if path == "/api/autoprocess/start":
+                return self._json({"job_id": autoprocess.start(int(body["assessment_id"]), bool(body.get("include_failed")))})
+            if path == "/api/autoprocess/cleanup":
+                return self._json(autoprocess.cleanup(str(body["folder"])))
             if path == "/api/run/siril":
                 a = history.get_assessment(int(body["assessment_id"]))
                 script = body.get("script") or a["assessment"].get("siril_script_text")
                 return self._json({"job_id": tools.run_siril_script(body.get("path") or a["file_path"], script)})
         except (assess.AssessmentError, update.UpdateError, dwarf.DwarfError, dwarfium_web.DwarfiumError,
-                scope.ScopeError, control.ControlError, projects.ProjectError, netcheck.NetError, diagnose.DiagnoseError, liveview.LiveError, KeyError) as e:
+                scope.ScopeError, control.ControlError, projects.ProjectError, netcheck.NetError, diagnose.DiagnoseError, liveview.LiveError, autoprocess.ProcessError, KeyError) as e:
             return self._json({"error": str(e)}, 400)
         except (FileNotFoundError, ValueError, KeyError) as e:
             return self._json({"error": str(e)}, 400)

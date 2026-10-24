@@ -1,6 +1,6 @@
 {
-  "version": "0.6.7",
-  "notes": "AWAY button removed. W and S swapped. New SCAN & CONNECT button at the top: searches until it finds the DWARF and connects, up to 30 seconds. Open in PIPP (and the other Moon programs) now finds the real program, not an installer in Downloads or a helper like pipp_core.exe, and starts it from its own folder.",
-  "sha256": "f9384f4543f309f85eca69839354bd957f4c5dfdb9b203d487c7f22b26b25c61",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.7.zip"
+  "version": "0.6.8",
+  "notes": "Auto-apply plan: after Assess, one button finds every raw frame of the photo's session (laptop, DWARF over USB-C or Wi-Fi), copies them to a processing folder after a space check, restacks in Siril with the plan's frame selection, crops, runs GraXpert, plate solves and colour calibrates, then finishes the plan and saves FITS/TIFF/JPG. Set the processing folder in Settings.",
+  "sha256": "01c4e6412acda3c509da13e47b9f0168d4f05e8961aba6211086a2e5ed8816d8",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.8.zip"
 }
