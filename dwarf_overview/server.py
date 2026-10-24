@@ -332,17 +332,6 @@ class Handler(BaseHTTPRequestHandler):
                 use_claude = bool(body.pop("use_claude", True))
                 return self._json({"job_id": tools.start_task(lambda: diagnose.run(body, shot, use_claude),
                                                               "Looking at what's going wrong")})
-            if path == "/api/scope/away":
-                holder: dict = {}
-                note = lambda m: tools.JOBS.get(holder.get("id"), {"log": []})["log"].append(m)
-                holder["id"] = tools.start_task(lambda: control.away(note),
-                                                "AWAY: stopping everything and tucking the lens away")
-                return self._json({"job_id": holder["id"]})
-            if path == "/api/scope/away_record":
-                if body.get("now"):
-                    return self._json({"saved": control.record_away()})
-                config.save({"away_pending": True})
-                return self._json({"pending": True})
             if path == "/api/scope/reboot":
                 return self._json(control.reboot())
             if path == "/api/live/start":
@@ -364,6 +353,9 @@ class Handler(BaseHTTPRequestHandler):
                                                               "Joining the DWARF's hotspot")})
             if path == "/api/net/rejoin":
                 return self._json(netcheck.rejoin_previous())
+            if path == "/api/scope/scan_connect":
+                return self._json({"job_id": tools.start_task(control.scan_connect,
+                                                              "Scanning for your DWARF and connecting")})
             if path == "/api/scope/scan":
                 return self._json({"job_id": tools.start_task(scope.scan, "Searching the local network for your DWARF")})
             if path == "/api/scope/stop":
@@ -414,7 +406,6 @@ def main() -> None:
     print(f"DWARF Overview {__version__} is running at {url}")
     print(f"Data and history are stored in {config.data_dir()}")
     print("Close this window (or press Ctrl+C) to stop it.")
-    control.away_watcher()
     if not os.environ.get("DWARF_OVERVIEW_NO_BROWSER"):
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:

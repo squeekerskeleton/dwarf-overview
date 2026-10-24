@@ -127,7 +127,7 @@
   <button id="setupBtn" title="Check that every program this app uses is installed">Setup</button>
   <button id="diagBtn" title="Show Claude what you're seeing and get it fixed">Diagnose</button>
   <button id="settingsBtn">Settings</button>
-  <button id="awayBtn" class="stopall" style="background:#6b4f1d" title="Stop everything and send the telescope home so the lens is tucked away">AWAY</button>
+  <button id="scanConnBtn" class="primary" title="Search for the DWARF until it's found (up to 30 seconds), then connect">SCAN &amp; CONNECT</button>
   <button id="stopAll" class="stopall" title="Stop the telescope moving, tracking, capturing and focusing, and stop any GraXpert or Siril run">Stop all</button>
 </header>
 <dialog id="stopDlg"><h2 style="margin-top:0">Stop all</h2><div id="stopOut"></div>
@@ -394,9 +394,6 @@
   <label for="dwarfiumWeb">Dwarfium web address (for the Telescope tab)</label><input id="dwarfiumWeb" placeholder="http://127.0.0.1:8000">
   <label for="updateUrl">Update source (latest.json address)</label><input id="updateUrl">
   <div class="caption" id="toolStatus" style="margin-top:8px"></div>
-  <label style="margin-top:10px">AWAY position</label>
-  <div class="caption" id="awayInfo"></div>
-  <div class="row" style="margin-top:4px"><button id="awayNext">Record next time the DWARF connects</button><button id="awayNow">Record where it is now</button></div>
   <div class="row" style="margin-top:10px"><button id="rebootBtn" style="border-color:#c0392b">Reboot DWARF</button><span class="caption">Restarts the telescope. It's offline for 1&ndash;2 minutes; the app finds it again afterwards.</span></div>
   <div class="row" style="margin-top:14px; justify-content:flex-end"><button id="clearKey">Remove saved key</button><button id="closeSettings">Cancel</button><button class="primary" id="saveSettings">Save</button></div>
 </dialog>
@@ -954,9 +951,6 @@ let linkHiddenAt = null;
 async function linkWatch() {
   let s; try { s = await api("/api/control/status"); } catch (e) { return; }
   const r = s.reconnect || {}, b = $("linkBanner");
-  const savedAt = s.away && s.away.position && s.away.position.saved_at;
-  if (awaySeen === undefined) awaySeen = savedAt || null;
-  else if (savedAt && savedAt !== awaySeen) { awaySeen = savedAt; showBanner(`<b>AWAY position saved</b> (rotation ${s.away.position.rotation}°, tilt ${s.away.position.tilt}°). The AWAY button now returns the DWARF here.`, "#1f4a2a"); return; }
   if (["reconnecting", "rebooting"].includes(r.state) || (r.state === "failed" && linkHiddenAt !== r.at)) b.dataset.owner = "link";
   if (r.state === "rebooting") {
     b.style.background = "#5a4a1a"; $("linkMsg").innerHTML = `<span class="spinner"></span> The DWARF is restarting. Waiting for it to come back${r.attempt ? ` (check ${r.attempt})` : ""}&hellip;`;
@@ -975,31 +969,30 @@ async function linkWatch() {
 }
 setInterval(linkWatch, 1000);
 function showBanner(html, color) { const b = $("linkBanner"); b.dataset.owner = "action"; b.style.background = color; $("linkMsg").innerHTML = html; $("linkRetry").classList.add("hidden"); b.classList.remove("hidden"); }
-$("awayBtn").onclick = async () => {
-  if (!confirm("AWAY: stop everything (moving, tracking, capturing, including any capture in progress)? (Moving to the AWAY position is switched off for now.)")) return;
-  showBanner('<span class="spinner"></span> AWAY: stopping everything&hellip;', "#5a4a1a");
+$("scanConnBtn").onclick = async () => {
+  const btn = $("scanConnBtn"); if (btn.disabled) return;
+  btn.disabled = true;
+  const t0 = Date.now(), tick = setInterval(() => showBanner(`<span class="spinner"></span> Scanning for your DWARF&hellip; ${Math.min(30, Math.round((Date.now() - t0) / 1000))} s of 30`, "#5a4a1a"), 500);
   try {
-    const { job_id } = await api("/api/scope/away", {});
-    for (;;) { await new Promise((r) => setTimeout(r, 1000)); const j = await api("/api/job/" + job_id);
-      if (j.state === "running") { showBanner(`<span class="spinner"></span> ${esc(j.log[j.log.length - 1])}`, "#5a4a1a"); continue; }
-      if (j.state !== "done") throw new Error(j.error || "AWAY failed.");
-      if (j.output && j.output.position === "none") { showBanner("<b>Everything is stopped.</b> Moving to the AWAY position is switched off in this version while it's being fixed.", "#1f4a2a"); break; }
-      showBanner(j.output && j.output.position === "yours" ? "<b>AWAY done.</b> Everything is stopped and the DWARF is back at your AWAY position." : "<b>AWAY done</b> (factory home position: set your own in Settings). Everything is stopped.", "#1f4a2a"); break; }
-  } catch (e) { showBanner(`<b>AWAY didn't finish.</b> ${esc(e.message)}`, "#5f1f1f"); }
+    const { job_id } = await api("/api/scope/scan_connect", {});
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 700));
+      const j = await api("/api/job/" + job_id);
+      if (j.state === "running") continue;
+      clearInterval(tick);
+      if (j.state !== "done") throw new Error(j.error || "");
+      const r = j.output;
+      cfg = await api("/api/config"); showDwarfAddr();
+      showBanner(`<b>Connected</b> to ${esc(r.name || r.ip)} at ${esc(r.ip)}.` + (r.control ? "" : " Another app may be holding control; close the DWARFLAB phone app."), "#1f4a2a");
+      setTimeout(() => { if ($("linkBanner").dataset.owner === "action") $("linkBanner").classList.add("hidden"); }, 6000);
+      if (typeof ctlRefresh === "function") ctlRefresh();
+      break;
+    }
+  } catch (e) {
+    clearInterval(tick);
+    showBanner('<b>OH NO! :( FAILED TO FIND DWARF!!</b> Make sure it\'s switched on and on your Wi-Fi (or the laptop is on its hotspot).' + (e.message ? ` <span class="caption">(${esc(e.message)})</span>` : ""), "#5f1f1f");
+  } finally { btn.disabled = false; }
 };
-function drawAwayInfo(a) {
-  if (!a) return;
-  $("awayInfo").textContent = a.pending ? "Waiting: put the DWARF where you want it (lens protected), and the next time it connects that position is saved." + (a.position ? ` Current one: saved ${a.position.saved_at}.` : "")
-    : a.position ? `Saved ${a.position.saved_at}: rotation ${a.position.rotation}°, tilt ${a.position.tilt}°. AWAY returns here.` : "Not set: AWAY uses the factory home position.";
-}
-$("settingsBtn").addEventListener("click", () => api("/api/control/status").then((s) => drawAwayInfo(s.away)).catch(() => {}));
-$("awayNext").onclick = async () => { await api("/api/scope/away_record", {}); drawAwayInfo((await api("/api/control/status")).away); };
-$("awayNow").onclick = async () => {
-  if (!confirm("Save where the DWARF is pointing right now as its AWAY position? (Nothing moves.)")) return;
-  try { await api("/api/scope/away_record", { now: true }); drawAwayInfo((await api("/api/control/status")).away); }
-  catch (e) { $("awayInfo").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
-};
-let awaySeen;
 $("rebootBtn").onclick = async () => {
   if (!confirm("Reboot the DWARF? Anything it's doing stops, and it's offline for 1–2 minutes while it restarts.")) return;
   $("settings").close();
@@ -1389,7 +1382,7 @@ const held = new Set(); let joyTimer = null, joyMoving = false;
 $("joySpeed").oninput = () => { joySpeed = +$("joySpeed").value; $("joySpeedVal").textContent = Math.round(joySpeed * 100) + "%"; };
 $("joySpeed").oninput();
 function joyVector(fast) {
-  const x = (held.has("d") ? 1 : 0) - (held.has("a") ? 1 : 0), y = (held.has("s") ? 1 : 0) - (held.has("w") ? 1 : 0);
+  const x = (held.has("d") ? 1 : 0) - (held.has("a") ? 1 : 0), y = (held.has("w") ? 1 : 0) - (held.has("s") ? 1 : 0);  // W and S swapped in 0.6.7 to match the real DWARF
   if (!x && !y) return null;
   return { angle: ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360, length: fast ? 1 : joySpeed };
 }

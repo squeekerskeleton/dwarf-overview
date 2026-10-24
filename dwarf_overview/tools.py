@@ -81,14 +81,30 @@ PROGRAMS = {
 
 
 def _search_roots() -> list[Path]:
+    """Install folders first, then the places a download usually lands."""
     home = Path.home()
-    roots = [home / "Desktop", home / "Downloads", home / "Documents", home / "OneDrive" / "Desktop"]
+    roots = []
     if IS_WIN:
         roots += [Path(os.environ.get("ProgramFiles", r"C:\Program Files")),
                   Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")),
-                  Path(os.environ.get("LOCALAPPDATA", "")), Path(os.environ.get("LOCALAPPDATA", "")) / "Programs",
-                  Path("C:/")]
+                  Path(os.environ.get("LOCALAPPDATA", "")) / "Programs", Path(os.environ.get("LOCALAPPDATA", ""))]
+    roots += [home / "Desktop", home / "OneDrive" / "Desktop", home / "Documents", home / "Downloads"]
+    if IS_WIN:
+        roots.append(Path("C:/"))
     return [r for r in roots if str(r) and r.is_dir()]
+
+
+# Installers, uninstallers and helper programs that sit next to the real one (PIPP ships pipp_core.exe).
+_NOT_THE_APP = ("install", "setup", "uninst", "unins", "update", "_core", "-core", "crash", "helper")
+
+
+def _best_exe(hits: list[Path], label: str) -> Path | None:
+    hits = [h for h in hits if not any(w in h.name.lower() for w in _NOT_THE_APP)]
+    if not hits:
+        return None
+    want = label.lower().replace(" ", "")
+    # The exact name (PIPP.exe) first, then the shortest name, then the newest version folder.
+    return sorted(hits, key=lambda h: (h.stem.lower() != want, len(h.stem), [-ord(c) for c in str(h.parent).lower()]))[0]
 
 
 _FOUND: dict[str, str | None] = {}
@@ -106,7 +122,7 @@ def find_tool(key: str) -> str | None:
         for root in _search_roots():
             for pattern in PROGRAMS[key]["globs"]:
                 try:
-                    hit = next(iter(sorted(root.glob(pattern), reverse=True)), None)
+                    hit = _best_exe(list(root.glob(pattern)), PROGRAMS[key]["label"])
                 except OSError:
                     hit = None
                 if hit:
@@ -129,8 +145,8 @@ def status() -> dict:
     return out
 
 
-def _popen_detached(args: list[str]) -> None:
-    kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+def _popen_detached(args: list[str], cwd: str | None = None) -> None:
+    kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "cwd": cwd}
     if IS_WIN:
         kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
@@ -170,7 +186,12 @@ def open_in(tool: str, file_path: str) -> None:
     elif IS_MAC and _app_bundle(exe):
         _popen_detached(["open", "-a", _app_bundle(exe), file_path])
     else:
-        _popen_detached([exe, file_path])
+        # Started from its own folder: some Windows programs (PIPP among them) look for their files there.
+        try:
+            _popen_detached([exe, file_path], cwd=str(Path(exe).parent))
+        except OSError as e:
+            name = PROGRAMS.get(tool, {}).get("label") or tool.capitalize()
+            raise FileNotFoundError(f"Couldn't start {name} ({exe}): {e}. Check its location in Settings.")
 
 
 # ---------------------------------------------------------------- background jobs

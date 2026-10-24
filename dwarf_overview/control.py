@@ -414,17 +414,29 @@ def connect() -> dict:
         lock = l.request(4, 13004, f_bool(1, True), timeout=6)["code"]
     except ControlError:
         lock = None
-    if config.load().get("away_pending"):
-        # The AWAY position set by hand is measured when the app next connects (reading it moves nothing).
-        def note_away():
-            time.sleep(2)
-            try:
-                record_away()
-            except Exception as e:
-                _note(f"AWAY position not read: {e}")
-        threading.Thread(target=note_away, daemon=True).start()
     return {"ip": l.ip, "name": info.get("name"), "model": info.get("model"), "control": lock == 0,
             "control_code": lock}
+
+
+SCAN_CONNECT_SECONDS = 30
+
+
+def scan_connect(seconds: float = SCAN_CONNECT_SECONDS) -> dict:
+    """Search again and again (last-known address, hotspot, recent devices, the local network) until a DWARF
+    answers, then save it and connect. Gives up after `seconds`."""
+    end = time.monotonic() + seconds
+    tries, last = 0, ""
+    while time.monotonic() < end:
+        tries += 1
+        d = _probe_once((config.load().get("dwarf_ip") or "").strip())
+        if d:
+            config.save({"dwarf_ip": d["ip"], "dwarf_hardware_id": d["hardware_id"]})
+            try:
+                return {**connect(), "found_after": tries}
+            except ControlError as e:  # found, but its control port isn't up yet (still starting): keep trying
+                last = f" Found {d.get('name') or d['ip']} but couldn't connect: {e}"
+        time.sleep(min(1.0, max(0.0, end - time.monotonic())))
+    raise ControlError(f"No DWARF answered in {int(seconds)} seconds ({tries} searches).{last}")
 
 
 def open_preview(camera: str = "tele", go_live: bool = False) -> dict:
@@ -465,131 +477,7 @@ def open_preview(camera: str = "tele", go_live: bool = False) -> dict:
             "preview_code": code}
 
 
-# ---------------------------------------------------------------- AWAY (stow) and reboot
-
-# Motor reset, the same four steps Dwarfium's "Reset motors" sends: each axis runs to its end stop and back
-# to the DWARF's home position, where the lens is tucked away, as after power-on.
-PARK_STEPS = [(1, True), (1, False), (2, False), (2, True)]
-
-
-def _await_final(l: "Link", module: int, cmd: int, data: bytes, timeout: float, code_field: int = 2) -> int:
-    """Send a request and wait for its completion notice (type 3); fail early on an error reply."""
-    with l.cv:
-        l.replies.pop((module, cmd), None)
-    l.send(module, cmd, data)
-    end = time.monotonic() + timeout
-    with l.cv:
-        while True:
-            got = l.replies.get((module, cmd), [])
-            for r in got:
-                code = sint(one(parse(r["data"]), code_field, 0))  # motor replies (ResMotor) carry id in 1, code in 2
-                if r["type"] == 3 or code != 0:
-                    return code
-            left = end - time.monotonic()
-            if left <= 0 or l.closed:
-                raise ControlError("The DWARF didn't finish moving in time." if not l.closed else
-                                   "The link to the DWARF dropped while it was moving.")
-            l.cv.wait(left)
-
-
-MOTORS = {1: "rotation", 2: "tilt"}
-AWAY_MOVES = False  # off until the move is checked on a real DWARF 3
-
-
-def _position_from(data: bytes) -> tuple[int, float]:
-    f = parse(data)  # ResMotorPosition: 1 id, 2 code, 3 position (degrees, double)
-    code = sint(one(f, 2, 0))
-    if code != 0:
-        raise ControlError(f"The DWARF couldn't report its position (code {code}).")
-    raw = one(f, 3, b"\0" * 8)
-    return sint(one(f, 1, 0)), struct.unpack("<d", raw)[0] if isinstance(raw, (bytes, bytearray)) else 0.0
-
-
-def read_positions(ip: str | None = None, hardware_id: int | None = None) -> dict:
-    """Read both motors' positions. Read-only: nothing moves. Uses the app's link if it's up, else a short one."""
-    out = {}
-    l = _LINK if _LINK and not _LINK.closed else None
-    if l:
-        for mid in MOTORS:
-            r = l.request(6, 14011, f_int(1, mid), timeout=5, code_field=2)
-            if r["code"] != 0:
-                raise ControlError(f"The DWARF couldn't report its {MOTORS[mid]} position (code {r['code']}).")
-            raw = one(r["fields"], 3, b"\0" * 8)
-            out[mid] = struct.unpack("<d", raw)[0]
-        return out
-    cfg = config.load()
-    ip = ip or (cfg.get("dwarf_ip") or "").strip()
-    hw = hardware_id or int(cfg.get("dwarf_hardware_id") or 2)
-    if not scope._is_local(ip):
-        raise ControlError("Find your DWARF first.")
-    client_id = scope.CLIENT_IDS.get(hw, "0000DAF3") + CLIENT_SUFFIX
-    ws = scope._WebSocket(ip, 9900, timeout=4)
-    try:
-        for mid in MOTORS:
-            ws.send(scope.packet(6, 14011, f_int(1, mid), client_id))
-        end = time.monotonic() + 5
-        while len(out) < len(MOTORS) and time.monotonic() < end:
-            ws.sock.settimeout(max(0.1, end - time.monotonic()))
-            msg = ws.recv()
-            if not msg:
-                continue
-            f = parse(msg)
-            if one(f, 5, 0) == 14011 and one(f, 6, 0) in (1, 3):
-                mid, pos = _position_from(one(f, 7, b""))
-                out[mid or (len(out) + 1)] = pos
-    except (OSError, ConnectionError) as e:
-        raise ControlError(f"Couldn't read the DWARF's position ({e}).")
-    finally:
-        ws.close()
-    if len(out) < len(MOTORS):
-        raise ControlError("The DWARF didn't report its position.")
-    return out
-
-
-def record_away(ip: str | None = None, hardware_id: int | None = None) -> dict:
-    """Save where the telescope is right now as its AWAY position."""
-    pos = read_positions(ip, hardware_id)
-    saved = {"rotation": round(pos[1], 3), "tilt": round(pos[2], 3),
-             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S")}
-    config.save({"away_position": saved, "away_pending": False})
-    return saved
-
-
-def away(progress=None) -> dict:
-    """Stop everything, then move the telescope to the AWAY position you set (lens tucked away)."""
-    cfg = config.load()
-    ip, hw = (cfg.get("dwarf_ip") or "").strip(), int(cfg.get("dwarf_hardware_id") or 2)
-    stopped = scope.stop_all(ip, hw)
-    if not AWAY_MOVES:
-        # Moving was switched off after it turned the wrong way on a real DWARF 3 (0.6.1). AWAY only stops.
-        return {"stopped": stopped.get("acknowledged"), "parked": False, "position": "none"}
-    if progress:
-        progress("Stopped everything; sending the telescope home…")
-    time.sleep(1.0)
-    l = link(connect=True)
-    if not _WANTED:
-        connect()
-    target = cfg.get("away_position") or None
-    if target:
-        # Same move Dwarfium uses for its preset positions: 10 degrees/s, ramping 100, resolution 3.
-        for mid, key in ((1, "rotation"), (2, "tilt")):
-            if progress:
-                progress(f"Moving {MOTORS[mid]} to your AWAY position ({float(target[key]):.1f}°)…")
-            data = f_int(1, mid) + f_double(2, float(target[key])) + f_double(3, 10) + f_int(4, 100) + f_int(5, 3)
-            code = _await_final(l, 6, 14001, data, timeout=90)
-            if code != 0:
-                raise ControlError(f"The {MOTORS[mid]} motor couldn't reach your AWAY position (code {code}). "
-                                   "Everything else is stopped.")
-        return {"stopped": stopped.get("acknowledged"), "parked": True, "position": "yours",
-                "saved_at": target.get("saved_at")}
-    for i, (motor, direction) in enumerate(PARK_STEPS, 1):
-        if progress:
-            progress(f"No AWAY position saved yet: using the factory home position ({i} of {len(PARK_STEPS)})…")
-        code = _await_final(l, 6, 14003, f_int(1, motor) + f_bool(2, direction), timeout=90)
-        if code != 0:
-            raise ControlError(f"The DWARF couldn't reach its factory home position (step {i}, code {code}). "
-                               "Everything is stopped. Set your own AWAY position in Settings.")
-    return {"stopped": stopped.get("acknowledged"), "parked": True, "position": "factory"}
+# ---------------------------------------------------------------- reboot
 
 
 def reboot() -> dict:
@@ -640,12 +528,10 @@ def status() -> dict:
     l = _LINK
     with _RECON_LOCK:
         recon = {k: v for k, v in _RECON.items() if k != "drops"}
-    cfg = config.load()
-    away_info = {"pending": bool(cfg.get("away_pending")), "position": cfg.get("away_position") or None}
     if not l or l.closed:
-        return {"connected": False, "reconnect": recon, "away": away_info}
+        return {"connected": False, "reconnect": recon}
     return {"connected": True, "ip": l.ip, "goto": l.goto, "seconds_since_heard": round(time.monotonic() - l.last_rx, 1),
-            "reconnect": recon, "away": away_info, "telemetry": l.telemetry}
+            "reconnect": recon, "telemetry": l.telemetry}
 
 
 _STORAGE_CACHE: dict = {}
@@ -678,32 +564,6 @@ def health() -> dict:
             except (OSError, ValueError, AttributeError):
                 pass
     return out
-
-
-def away_watcher() -> None:
-    """While an AWAY position is waiting to be recorded, record it the next time the DWARF connects.
-
-    "Next time" means the DWARF goes from off (or out of reach) to reachable, so a position set by hand
-    while it's off is what gets saved, not wherever it was when the app started.
-    """
-    def run():
-        was_online = None
-        while True:
-            time.sleep(4)
-            try:
-                cfg = config.load()
-                ip = (cfg.get("dwarf_ip") or "").strip()
-                if not cfg.get("away_pending"):
-                    was_online = None
-                    continue
-                online = scope._is_local(ip) and scope._port_open(ip, 8082, 1.0)
-                if online and was_online is False:
-                    time.sleep(8)  # let it finish starting up
-                    record_away()
-                was_online = online if was_online is not None or not online else True
-            except Exception:  # try again on the next pass
-                pass
-    threading.Thread(target=run, daemon=True).start()
 
 
 def disconnect() -> dict:
