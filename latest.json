@@ -1,6 +1,6 @@
 {
-  "version": "0.6.8",
-  "notes": "Auto-apply plan: after Assess, one button finds every raw frame of the photo's session (laptop, DWARF over USB-C or Wi-Fi), copies them to a processing folder after a space check, restacks in Siril with the plan's frame selection, crops, runs GraXpert, plate solves and colour calibrates, then finishes the plan and saves FITS/TIFF/JPG. Set the processing folder in Settings.",
-  "sha256": "01c4e6412acda3c509da13e47b9f0168d4f05e8961aba6211086a2e5ed8816d8",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.8.zip"
+  "version": "0.6.9",
+  "notes": "Network now opens as a panel over the current tab, so live view and processing keep running underneath (Esc closes it). New Hardware usage section: CPU per thread, memory, NVIDIA GPU, network traffic, drives and the busiest programs. Installs psutil on restart.",
+  "sha256": "6d3ed83a870cbc0705d26e152a0a2328b72cd11fdd3425e4b329a61dcde34d4f",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.9.zip"
 }

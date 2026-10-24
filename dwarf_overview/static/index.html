@@ -30,6 +30,15 @@
   #liveBox:focus { box-shadow: 0 0 0 2px var(--accent); }
   #liveImg, #liveFrame { width: 100%; height: 100%; object-fit: contain; transform-origin: 0 0; user-select: none; -webkit-user-drag: none; border: 0; display: block; }
   #liveShield { position: absolute; inset: 0; }
+  #netTab { position: fixed; top: 0; right: 0; bottom: 0; width: min(1100px, 100vw); z-index: 900; overflow-y: auto;
+    background: var(--bg); border-left: 1px solid var(--line); box-shadow: -12px 0 40px rgba(0,0,0,.45); padding: 12px 16px; }
+  #netTab .twocol { grid-template-columns: 1fr 1fr; }
+  .hwbar { height: 8px; border-radius: 4px; background: var(--panel2); overflow: hidden; margin-top: 3px; }
+  .hwbar span { display: block; height: 100%; background: var(--accent); }
+  .hwbar span.warn { background: var(--warn); } .hwbar span.bad { background: var(--bad); }
+  .cores { display: grid; grid-template-columns: repeat(auto-fill, minmax(18px, 1fr)); gap: 2px; margin-top: 4px; }
+  .cores i { display: block; height: 22px; background: var(--panel2); border-radius: 2px; position: relative; overflow: hidden; }
+  .cores i b { position: absolute; left: 0; right: 0; bottom: 0; background: var(--accent); }
   #liveMsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 20px; }
   .pad { display: grid; grid-template-columns: repeat(3, 44px); gap: 4px; }
   .pad button { height: 40px; padding: 0; }
@@ -314,7 +323,22 @@
   </div>
 </section>
 
-<section id="netTab" class="hidden">
+<section id="netTab" class="hidden" aria-label="Network and hardware">
+  <div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0">Network and hardware</h2>
+    <span class="caption">Opens over what you're doing; everything underneath keeps running.</span><button id="netClose">Close (Esc)</button></div>
+  <div class="card"><h2>Hardware usage</h2>
+    <div class="twocol" style="gap:12px">
+      <div><div class="row" style="justify-content:space-between"><b>Processor</b><span id="hwCpu" class="caption"></span></div>
+        <div class="hwbar"><span id="hwCpuBar"></span></div><div class="cores" id="hwCores"></div>
+        <div class="row" style="justify-content:space-between;margin-top:10px"><b>Memory</b><span id="hwMem" class="caption"></span></div>
+        <div class="hwbar"><span id="hwMemBar"></span></div>
+        <div id="hwGpu" style="margin-top:10px"></div>
+        <div id="hwNet" style="margin-top:10px"></div></div>
+      <div><b>Drives</b><div id="hwDrives"></div>
+        <b style="display:block;margin-top:10px">Busiest programs</b><table class="ovtable" id="hwProcs" style="width:100%"></table></div>
+    </div>
+    <div class="caption" id="hwNote"></div>
+  </div>
   <div class="twocol">
     <div>
       <div class="card"><h2>Connection right now</h2>
@@ -500,7 +524,17 @@ $("nightBtn").onclick = () => { document.body.classList.toggle("night"); try { l
 try { if (localStorage.getItem("night")) document.body.classList.add("night"); } catch (e) {}
 
 // ---------------- tabs
+function netOpen(show) {
+  $("netTab").classList.toggle("hidden", !show);
+  document.querySelector('.tab[data-tab="net"]').classList.toggle("active", show);
+  if (show) netStart(); else netStop();
+}
+$("netClose").onclick = () => netOpen(false);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("netTab").classList.contains("hidden")) netOpen(false); });
 document.querySelectorAll(".tab").forEach((b) => b.onclick = () => {
+  // Network opens as an overlay, so the tab underneath (live view, a running job) carries on untouched.
+  if (b.dataset.tab === "net") { netOpen($("netTab").classList.contains("hidden")); return; }
+  netOpen(false);
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === b));
   $("workTab").classList.toggle("hidden", b.dataset.tab !== "work");
   $("historyTab").classList.toggle("hidden", b.dataset.tab !== "history");
@@ -508,8 +542,6 @@ document.querySelectorAll(".tab").forEach((b) => b.onclick = () => {
   $("scopeTab").classList.toggle("hidden", b.dataset.tab !== "scope");
   $("controlTab").classList.toggle("hidden", b.dataset.tab !== "control");
   $("projectsTab").classList.toggle("hidden", b.dataset.tab !== "projects");
-  $("netTab").classList.toggle("hidden", b.dataset.tab !== "net");
-  if (b.dataset.tab === "net") netStart(); else netStop();
   if (b.dataset.tab !== "control") joyRelease();
   if (b.dataset.tab === "control") openControl();
   if (b.dataset.tab === "projects") loadProjects();
@@ -1122,7 +1154,23 @@ $("setupDone").onclick = async () => { await api("/api/setup/done", {}); cfg.set
 
 // ---------------- network tab
 let netTimer = null, netHist = [], netBle = null;
-function netStart() { if (!netTimer) { netPoll(); netTimer = setInterval(netPoll, 2000); } }
+function netStart() { if (!netTimer) { netPoll(); hwPoll(); netTimer = setInterval(() => { netPoll(); hwPoll(); }, 2000); } }
+const lvl = (p) => p >= 90 ? "bad" : p >= 70 ? "warn" : "";
+function hwBar(id, p) { const el = $(id); el.style.width = Math.min(100, p) + "%"; el.className = lvl(p); }
+async function hwPoll() {
+  let h; try { h = await api("/api/hw"); } catch (e) { $("hwNote").textContent = e.message; return; }
+  if (!h.available) { $("hwNote").textContent = h.note; return; }
+  $("hwNote").textContent = "";
+  $("hwCpu").textContent = `${Math.round(h.cpu_percent)}% of ${h.cores} threads${h.cpu_mhz ? ` · ${(h.cpu_mhz / 1000).toFixed(2)} GHz` : ""}`; hwBar("hwCpuBar", h.cpu_percent);
+  $("hwCores").innerHTML = h.per_core.map((c) => `<i title="${Math.round(c)}%"><b style="height:${c}%"></b></i>`).join("");
+  $("hwMem").textContent = `${h.memory.used_gb} of ${h.memory.total_gb} GB (${Math.round(h.memory.percent)}%)`; hwBar("hwMemBar", h.memory.percent);
+  $("hwGpu").innerHTML = (h.gpu || []).map((g) => `<div class="row" style="justify-content:space-between"><b>${esc(g.name)}</b><span class="caption">${g.percent ?? "?"}%${g.mem_total_mb ? ` · ${(g.mem_used_mb / 1024).toFixed(1)} of ${(g.mem_total_mb / 1024).toFixed(1)} GB` : ""}${g.temp_c != null ? ` · ${g.temp_c}°C` : ""}</span></div>
+    <div class="hwbar"><span class="${lvl(g.percent || 0)}" style="width:${g.percent || 0}%"></span></div>`).join("") || '<span class="caption">Graphics card: no NVIDIA usage reading available.</span>';
+  $("hwNet").innerHTML = h.network.length ? "<b>Network traffic</b>" + h.network.map((n) => `<div class="caption">${esc(n.name)}: ↓ ${n.down_mbps} Mbit/s · ↑ ${n.up_mbps} Mbit/s</div>`).join("") : '<span class="caption">Network traffic: quiet.</span>';
+  $("hwDrives").innerHTML = h.drives.map((d) => `<div style="margin-top:6px"><div class="row" style="justify-content:space-between"><span>${esc(d.mount)}${d.used_for ? ` <span class="chip">${esc(d.used_for)}</span>` : ""}</span><span class="caption">${d.free_gb} GB free of ${d.total_gb}</span></div>
+    <div class="hwbar"><span class="${lvl(d.percent)}" style="width:${d.percent}%"></span></div></div>`).join("");
+  $("hwProcs").innerHTML = '<tr><td></td><td class="caption">CPU</td><td class="caption">Memory</td></tr>' + h.processes.map((p) => `<tr><td>${p.ours ? "<b>" + esc(p.name) + "</b>" : esc(p.name)}</td><td>${p.cores >= 1 ? p.cores + " cores" : Math.round(p.cpu_percent) + "%"}</td><td>${p.memory_mb >= 1024 ? (p.memory_mb / 1024).toFixed(1) + " GB" : p.memory_mb + " MB"}</td></tr>`).join("");
+}
 function netStop() { clearInterval(netTimer); netTimer = null; }
 const yes = (b, t, f) => b ? `<span class="ok">${t}</span>` : `<span class="muted">${f}</span>`;
 async function netPoll() {

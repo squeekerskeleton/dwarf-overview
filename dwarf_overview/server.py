@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update, control, planner, projects, setupcheck, liveview, learn, netcheck, diagnose, autoprocess
+from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update, control, planner, projects, setupcheck, liveview, learn, netcheck, diagnose, autoprocess, hwstats
 
 RESTART_EXIT_CODE = 3  # start-windows.bat relaunches the app when it exits with this code
 
@@ -166,6 +166,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(learn.summary())
             if url.path == "/api/control/status":
                 return self._json(control.status())
+            if url.path == "/api/hw":
+                return self._json(hwstats.snapshot())
             if url.path == "/api/scope/health":
                 return self._json(control.health())
             if url.path == "/api/control/camera":

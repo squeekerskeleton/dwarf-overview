@@ -110,6 +110,8 @@ Goto needs your site's latitude and longitude in Settings.
 
 ## Network
 
+**Network** opens as a panel over whatever you're doing (live view, a processing run), so nothing underneath stops; close it with **Close** or Esc. At the top, **Hardware usage** shows the processor (each thread), memory, the graphics card (NVIDIA), network traffic, free space on each drive (marking the library and processing drives), and the busiest programs, with the app and the tools it runs named.
+
 The **Network** tab shows live, every 2 seconds:
 - how the laptop reaches the DWARF: your Wi-Fi (STA mode), the DWARF's own hotspot, or not at all;
 - whether it's online, the round-trip time, and whether the control port is open;

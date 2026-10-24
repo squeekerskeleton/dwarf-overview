@@ -4,3 +4,4 @@ pillow>=10
 astropy>=6
 tifffile>=2024.1
 opencv-python-headless>=4.8
+psutil>=5.9
