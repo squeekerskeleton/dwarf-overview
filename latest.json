@@ -1,6 +1,6 @@
 {
-  "version": "0.6.9",
-  "notes": "Network now opens as a panel over the current tab, so live view and processing keep running underneath (Esc closes it). New Hardware usage section: CPU per thread, memory, NVIDIA GPU, network traffic, drives and the busiest programs. Installs psutil on restart.",
-  "sha256": "6d3ed83a870cbc0705d26e152a0a2328b72cd11fdd3425e4b329a61dcde34d4f",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.6.9.zip"
+  "version": "0.7.0",
+  "notes": "Renamed to DWARF Post-Processing Hub. Auto-apply now has a progress bar with time left. New PAUSE ALL button suspends Siril/GraXpert and frame copying (RESUME ALL carries on). At startup the app measures this computer (threads, speed, memory, graphics card, drive speed) and tunes Siril threads and memory, GraXpert GPU use, parallel frame copies and priority to it.",
+  "sha256": "77e4eab9c84e1bd7ab6933089f954f6a74deb876718c49c0dae2bfe90de5cb9e",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.7.0.zip"
 }

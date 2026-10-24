@@ -119,7 +119,7 @@ def _validated_members(z: zipfile.ZipFile) -> list[tuple[zipfile.ZipInfo, PurePo
             raise UpdateError(f"Unexpected file type in update: {rel}")
         members.append((info, rel))
     if not any(str(rel) == "dwarf_overview/__init__.py" for _, rel in members):
-        raise UpdateError("The update doesn't look like DWARF Overview; stopped.")
+        raise UpdateError("The update doesn't look like DWARF Post-Processing Hub; stopped.")
     return members
 
 

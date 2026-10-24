@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update, control, planner, projects, setupcheck, liveview, learn, netcheck, diagnose, autoprocess, hwstats
+from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update, control, planner, projects, setupcheck, liveview, learn, netcheck, diagnose, autoprocess, hwstats, hwprofile
 
 RESTART_EXIT_CODE = 3  # start-windows.bat relaunches the app when it exits with this code
 
@@ -165,9 +165,9 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/learn/summary":
                 return self._json(learn.summary())
             if url.path == "/api/control/status":
-                return self._json(control.status())
+                return self._json({**control.status(), "paused": tools.PAUSED.is_set()})
             if url.path == "/api/hw":
-                return self._json(hwstats.snapshot())
+                return self._json({**hwstats.snapshot(), "profile": hwprofile.profile(), "paused": tools.PAUSED.is_set()})
             if url.path == "/api/scope/health":
                 return self._json(control.health())
             if url.path == "/api/control/camera":
@@ -360,6 +360,10 @@ class Handler(BaseHTTPRequestHandler):
                                                               "Scanning for your DWARF and connecting")})
             if path == "/api/scope/scan":
                 return self._json({"job_id": tools.start_task(scope.scan, "Searching the local network for your DWARF")})
+            if path == "/api/pause":
+                return self._json(tools.pause_all())
+            if path == "/api/resume":
+                return self._json(tools.resume_all())
             if path == "/api/scope/stop":
                 out = {"jobs_stopped": tools.stop_jobs()}
                 cfg = config.load()
@@ -416,9 +420,10 @@ def main() -> None:
     port = int(os.environ.get("DWARF_OVERVIEW_PORT", "8765"))
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
-    print(f"DWARF Overview {__version__} is running at {url}")
+    print(f"DWARF Post-Processing Hub {__version__} is running at {url}")
     print(f"Data and history are stored in {config.data_dir()}")
     print("Close this window (or press Ctrl+C) to stop it.")
+    hwprofile.start()  # measure this computer and tune Siril, GraXpert and copying to it
     if not os.environ.get("DWARF_OVERVIEW_NO_BROWSER"):
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:

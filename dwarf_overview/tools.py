@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -205,8 +206,9 @@ def _run_job(job_id: str, steps: list[tuple[str, callable, str | None]], result_
         for label, make_args, cwd in steps:
             job["log"].append(f"$ {label}")
             args = make_args()
+            from .hwprofile import priority_flags
             proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd,
-                                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+                                    creationflags=priority_flags())
             job["proc"] = proc
             try:
                 stdout, stderr = proc.communicate(timeout=1800)
@@ -228,13 +230,73 @@ def _run_job(job_id: str, steps: list[tuple[str, callable, str | None]], result_
             job["error"] = str(e)
 
 
-def stop_jobs() -> int:
-    """Kill every GraXpert/Siril run still going. Returns how many were stopped."""
-    stopped = 0
+PAUSED = threading.Event()
+
+
+def _tree(pid: int) -> list:
+    import psutil
+    try:
+        p = psutil.Process(pid)
+        return [p] + p.children(recursive=True)
+    except psutil.Error:
+        return []
+
+
+def pause_all() -> dict:
+    """Suspend every program the app is running (Siril, GraXpert) and hold frame copying, until resume_all."""
+    PAUSED.set()
+    names = []
     for job in list(JOBS.values()):
         proc = job.get("proc")
         if job["state"] == "running" and proc and proc.poll() is None:
+            for p in _tree(proc.pid):
+                try:
+                    p.suspend()
+                    names.append(p.name())
+                except Exception:  # already gone, or not ours to pause
+                    pass
+            job["paused"] = True
+    return {"paused": True, "programs": sorted(set(names))}
+
+
+def resume_all() -> dict:
+    names = []
+    for job in list(JOBS.values()):
+        proc = job.get("proc")
+        if job.get("paused") and proc and proc.poll() is None:
+            for p in reversed(_tree(proc.pid)):
+                try:
+                    p.resume()
+                    names.append(p.name())
+                except Exception:
+                    pass
+        job["paused"] = False
+    PAUSED.clear()
+    return {"paused": False, "programs": sorted(set(names))}
+
+
+def wait_if_paused() -> None:
+    while PAUSED.is_set():
+        time.sleep(0.5)
+
+
+def stop_jobs() -> int:
+    """Kill every GraXpert/Siril run still going. Returns how many were stopped."""
+    stopped = 0
+    PAUSED.clear()  # a paused copy loop wakes up and sees the stop
+    for job in list(JOBS.values()):
+        if job["state"] == "running" and job.get("steps") and not job.get("proc"):
+            job["state"], job["error"] = "stopped", "Stopped by Stop all."  # an Auto-apply run between programs
+            stopped += 1
+            continue
+        proc = job.get("proc")
+        if job["state"] == "running" and proc and proc.poll() is None:
             job["state"], job["error"] = "stopped", "Stopped by Stop all."
+            for p in _tree(proc.pid)[1:]:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
             proc.kill()
             stopped += 1
     return stopped
@@ -306,7 +368,7 @@ def build_siril_script(file_path: str, commands: list[dict]) -> str:
     from .assess import SIRIL_COMMANDS
 
     src = Path(file_path)
-    lines = ["# Written by DWARF Overview. Review before running.", "requires 1.2.0", f'load "{src.name}"']
+    lines = ["# Written by DWARF Post-Processing Hub. Review before running.", "requires 1.2.0", f'load "{src.name}"']
     saved = False
     for c in commands:
         name, args = c.get("command"), (c.get("args") or "").strip()

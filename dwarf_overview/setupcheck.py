@@ -1,6 +1,6 @@
 """First-time setup and the pre-start software check.
 
-Lists everything DWARF Overview uses, whether it's on this computer, and where
+Lists everything DWARF Post-Processing Hub uses, whether it's on this computer, and where
 to download it (official sites only). Nothing is installed silently; the page
 opens the download pages and checks again afterwards. Dwarfium's browser
 edition is the exception: the app installs that itself, with a checksum check.
@@ -86,7 +86,7 @@ def main() -> int:
     """Console check for the launcher: exit code 1 only if something required to start is missing."""
     missing = _packages()
     if sys.version_info < (3, 10):
-        print(f"DWARF Overview needs Python 3.10 or newer; this is {sys.version.split()[0]}.")
+        print(f"DWARF Post-Processing Hub needs Python 3.10 or newer; this is {sys.version.split()[0]}.")
         print("Get it from https://www.python.org/downloads/ and run the launcher again.")
         return 1
     if missing:

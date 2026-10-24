@@ -48,7 +48,7 @@ def _app_label(p) -> str | None:
     if name.startswith("python"):
         cmd = " ".join(p.info.get("cmdline") or [])
         if "dwarf_overview" in cmd:
-            return "DWARF Overview"
+            return "DWARF Post-Processing Hub"
     return None
 
 

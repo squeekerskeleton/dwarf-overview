@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DWARF Overview</title>
+<title>DWARF Post-Processing Hub</title>
 <style>
   :root {
     --bg: #0d1117; --panel: #161b22; --panel2: #1f2630; --line: #2d3540; --text: #e6edf3; --muted: #8b949e;
@@ -120,7 +120,7 @@
 </head>
 <body>
 <header>
-  <h1>DWARF Overview</h1>
+  <h1>DWARF Post-Processing Hub</h1>
   <button class="tab active" data-tab="work">Assess</button>
   <button class="tab" data-tab="control">Plan &amp; Control</button>
   <button class="tab" data-tab="scope">Telescope</button>
@@ -137,6 +137,7 @@
   <button id="diagBtn" title="Show Claude what you're seeing and get it fixed">Diagnose</button>
   <button id="settingsBtn">Settings</button>
   <button id="scanConnBtn" class="primary" title="Search for the DWARF until it's found (up to 30 seconds), then connect">SCAN &amp; CONNECT</button>
+  <button id="pauseAll" class="stopall" style="background:#8a6d1a" title="Pause the programs the app is running (Siril, GraXpert) and frame copying; press again to resume">PAUSE ALL</button>
   <button id="stopAll" class="stopall" title="Stop the telescope moving, tracking, capturing and focusing, and stop any GraXpert or Siril run">Stop all</button>
 </header>
 <dialog id="stopDlg"><h2 style="margin-top:0">Stop all</h2><div id="stopOut"></div>
@@ -185,6 +186,8 @@
           <div class="row"><button class="primary" id="autoRun">Auto-apply plan</button>
             <label style="display:inline-flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="autoFailed" style="width:auto"> Include frames the DWARF rejected</label></div>
           <div id="autoFrames" class="caption">Restacks every raw frame of this session, then runs each step below. Your originals are never changed.</div>
+          <div id="autoProg" class="hidden" style="margin-top:8px"><div class="row" style="justify-content:space-between"><b id="autoPct">0%</b><span class="caption" id="autoEta"></span></div>
+            <div class="hwbar" style="height:12px"><span id="autoBar" style="width:0%"></span></div></div>
           <div id="autoSteps" style="margin-top:6px"></div>
           <pre id="autoLog" class="hidden" style="max-height:160px;overflow:auto"></pre>
         </div>
@@ -338,6 +341,7 @@
         <b style="display:block;margin-top:10px">Busiest programs</b><table class="ovtable" id="hwProcs" style="width:100%"></table></div>
     </div>
     <div class="caption" id="hwNote"></div>
+    <div class="caption" id="hwProfile" style="margin-top:6px"></div>
   </div>
   <div class="twocol">
     <div>
@@ -382,7 +386,7 @@
 </dialog>
 
 <dialog id="setupDlg" style="max-width:720px">
-  <h2 style="margin-top:0">Set up DWARF Overview</h2>
+  <h2 style="margin-top:0">Set up DWARF Post-Processing Hub</h2>
   <p class="muted">Here's every program the app uses and whether it's on this computer. Click <b>Download</b> to open each program's official download page, install it with the default options, then click <b>Check again</b>.</p>
   <div id="setupList"></div>
   <div class="row" style="margin-top:12px;justify-content:flex-end"><button id="setupRecheck">Check again</button><button class="primary" id="setupDone">Done</button></div>
@@ -749,6 +753,15 @@ async function autoFrames() {
   } catch (e) { $("autoFrames").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
 }
 $("autoFailed").onchange = autoFrames;
+function fmtDur(s) { s = Math.round(s); return s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.round(s % 3600 / 60)} min` : s >= 60 ? `${Math.round(s / 60)} min` : `${s} s`; }
+function drawAutoProgress(j) {
+  $("autoProg").classList.remove("hidden");
+  const p = j.state === "done" ? 100 : j.progress || 0;
+  $("autoBar").style.width = p + "%"; $("autoPct").textContent = Math.floor(p) + "%";
+  const cur = (j.steps || []).find((s) => s.state === "running");
+  $("autoEta").textContent = j.state !== "running" ? (j.state === "done" ? `Finished in ${fmtDur(Date.now() / 1000 - j.started)}` : "")
+    : (j.paused || $("pauseAll").textContent === "RESUME ALL") ? "Paused" : `${cur ? cur.label + " · " : ""}${j.eta_seconds != null ? "about " + fmtDur(j.eta_seconds) + " left" : "working out time left…"}`;
+}
 function drawAutoSteps(steps) {
   const icon = { waiting: "○", running: '<span class="spinner"></span>', done: '<span class="ok">✓</span>', skipped: '<span class="warn">–</span>', failed: '<span class="error">✗</span>' };
   $("autoSteps").innerHTML = steps.map((s) => `<div>${icon[s.state] || ""} ${esc(s.label)}${s.note ? ` <span class="caption">${esc(s.note)}</span>` : ""}</div>`).join("");
@@ -762,7 +775,7 @@ $("autoRun").onclick = async () => {
     for (;;) {
       await new Promise((r) => setTimeout(r, 2000));
       const j = await api("/api/job/" + job_id);
-      drawAutoSteps(j.steps || []); $("autoLog").textContent = j.log.join("\n"); $("autoLog").scrollTop = 1e9;
+      drawAutoSteps(j.steps || []); drawAutoProgress(j); $("autoLog").textContent = j.log.join("\n"); $("autoLog").scrollTop = 1e9;
       if (j.state === "running") continue;
       if (j.state === "done") {
         const o = j.output; latestOutput = o.final;
@@ -967,6 +980,15 @@ async function fillDwarfium() {
 $("scopeFind").onclick = async () => { if (await findDwarf($("scopeStatus"))) fillDwarfium(); };
 $("scopeFill").onclick = () => fillDwarfium().catch((e) => alert(e.message));
 $("dwFind").onclick = () => findDwarf($("dwStatus"));
+async function setPaused(on) {
+  const r = await api(on ? "/api/pause" : "/api/resume", {});
+  $("pauseAll").textContent = r.paused ? "RESUME ALL" : "PAUSE ALL";
+  $("pauseAll").style.background = r.paused ? "#1f6a3a" : "#8a6d1a";
+  showBanner(r.paused ? `<b>Paused.</b> ${r.programs.length ? "Suspended " + esc(r.programs.join(", ")) + "." : "Nothing was running; new work waits until you resume."} Press RESUME ALL to carry on.`
+    : `<b>Resumed.</b>${r.programs.length ? " " + esc(r.programs.join(", ")) + " carrying on." : ""}`, r.paused ? "#5a4a1a" : "#1f4a2a");
+  if (!r.paused) setTimeout(() => { if ($("linkBanner").dataset.owner === "action") $("linkBanner").classList.add("hidden"); }, 4000);
+}
+$("pauseAll").onclick = () => setPaused($("pauseAll").textContent === "PAUSE ALL").catch((e) => alert(e.message));
 $("stopAll").onclick = async () => {
   if (!confirm("Stop everything? The telescope stops moving, tracking, capturing and focusing (a live stack keeps what it has so far), and any GraXpert or Siril run is cancelled.")) return;
   $("stopOut").innerHTML = '<span class="spinner"></span> Stopping&hellip;'; $("stopDlg").showModal();
@@ -1042,6 +1064,7 @@ let linkHiddenAt = null;
 async function linkWatch() {
   let s; try { s = await api("/api/control/status"); } catch (e) { return; }
   const r = s.reconnect || {}, b = $("linkBanner");
+  const pb = $("pauseAll"); if ((pb.textContent === "RESUME ALL") !== !!s.paused) { pb.textContent = s.paused ? "RESUME ALL" : "PAUSE ALL"; pb.style.background = s.paused ? "#1f6a3a" : "#8a6d1a"; }
   if (["reconnecting", "rebooting"].includes(r.state) || (r.state === "failed" && linkHiddenAt !== r.at)) b.dataset.owner = "link";
   if (r.state === "rebooting") {
     b.style.background = "#5a4a1a"; $("linkMsg").innerHTML = `<span class="spinner"></span> The DWARF is restarting. Waiting for it to come back${r.attempt ? ` (check ${r.attempt})` : ""}&hellip;`;
@@ -1159,6 +1182,9 @@ const lvl = (p) => p >= 90 ? "bad" : p >= 70 ? "warn" : "";
 function hwBar(id, p) { const el = $(id); el.style.width = Math.min(100, p) + "%"; el.className = lvl(p); }
 async function hwPoll() {
   let h; try { h = await api("/api/hw"); } catch (e) { $("hwNote").textContent = e.message; return; }
+  const pr = h.profile || {};
+  $("hwProfile").textContent = (pr.summary || "") + (pr.cpu ? ` Measured at startup: ${pr.cpu.name}, ${pr.cpu.threads} threads, ${pr.memory_gb} GB memory${pr.gpu ? ", " + pr.gpu.name : ""}${pr.work_disk_mb_s ? `, processing drive writes ${pr.work_disk_mb_s} MB/s` : ""}.` : "");
+  $("pauseAll").textContent = h.paused ? "RESUME ALL" : "PAUSE ALL";
   if (!h.available) { $("hwNote").textContent = h.note; return; }
   $("hwNote").textContent = "";
   $("hwCpu").textContent = `${Math.round(h.cpu_percent)}% of ${h.cores} threads${h.cpu_mhz ? ` · ${(h.cpu_mhz / 1000).toFixed(2)} GHz` : ""}`; hwBar("hwCpuBar", h.cpu_percent);

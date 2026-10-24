@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from . import config, dwarf, history, scope, tools
+from . import config, dwarf, history, hwprofile, scope, tools
 
 FRAME = re.compile(r"\.(fits?|fts)$", re.I)
 NOT_A_FRAME = re.compile(r"^(stacked|thumbnail|result_|overview_)|_(gx|siril|crop|bg|dn)", re.I)
@@ -169,12 +169,40 @@ class _Job:
     def __init__(self, steps: list[str]):
         self.id = uuid.uuid4().hex[:10]
         self.job = tools.JOBS[self.id] = {"state": "running", "log": [], "output": None, "error": None,
-                                          "steps": [{"label": s, "state": "waiting", "note": ""} for s in steps]}
+                                          "steps": [{"label": s, "state": "waiting", "note": "", "fraction": 0.0}
+                                                    for s in steps],
+                                          "progress": 0.0, "started": time.time(), "eta_seconds": None}
+        self.weights = list(WEIGHTS)
+        self.paused_for = 0.0
 
     def step(self, n: int, state: str, note: str = "") -> None:
-        self.job["steps"][n].update(state=state, note=note)
+        s = self.job["steps"][n]
+        s.update(state=state, note=note or s["note"] if state == "running" else note)
+        if state in ("done", "skipped"):
+            s["fraction"] = 1.0
         if note:
             self.log(note)
+        self._progress()
+
+    def part(self, n: int, fraction: float) -> None:
+        """How far through step n (0 to 1)."""
+        s = self.job["steps"][n]
+        s["fraction"] = max(s["fraction"], min(1.0, fraction))
+        self._progress()
+
+    def _progress(self) -> None:
+        total = sum(self.weights) or 1
+        done = sum(w * s["fraction"] for w, s in zip(self.weights, self.job["steps"]))
+        p = round(100 * done / total, 1)
+        self.job["progress"] = p
+        spent = time.time() - self.job["started"] - self.paused_for
+        self.job["eta_seconds"] = round(spent * (100 - p) / p) if p >= 3 else None
+
+    def wait_if_paused(self) -> None:
+        if tools.PAUSED.is_set():
+            t = time.time()
+            tools.wait_if_paused()
+            self.paused_for += time.time() - t
 
     def log(self, line: str) -> None:
         self.job["log"] = (self.job["log"] + [line])[-400:]
@@ -182,25 +210,40 @@ class _Job:
     def stopped(self) -> bool:
         return self.job["state"] == "stopped"
 
-    def run(self, args: list[str], cwd: Path, timeout: float = 6 * 3600) -> tuple[int, str]:
+    def run(self, args: list[str], cwd: Path, timeout: float = 6 * 3600, step: int | None = None,
+            phases: list[str] | None = None) -> tuple[int, str]:
+        """Run a program, logging its output. With phases (the script's commands in order), progress within
+        `step` follows which command Siril is on and the percentage it prints."""
+        self.wait_if_paused()
         proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=str(cwd),
-                                errors="replace",
-                                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+                                errors="replace", creationflags=hwprofile.priority_flags())
         self.job["proc"] = proc
         out, end = [], time.monotonic() + timeout
+        phase = 0
         for line in proc.stdout:
             line = line.rstrip()
             if line:
                 out.append(line)
+                pct = re.search(r"(\d{1,3}(?:\.\d+)?)\s?%", line)
                 if not re.search(r"^\s*(\d+(\.\d+)?%|progress)", line, re.I):
                     self.log(line[:300])
-            if time.monotonic() > end:
+                if step is not None and phases:
+                    low = line.lower()
+                    for k in range(phase + 1, len(phases)):
+                        if re.search(r"\b" + re.escape(phases[k]) + r"\b", low):
+                            phase = k
+                            break
+                    within = min(1.0, float(pct.group(1)) / 100) if pct and "%" in line else 0.0
+                    self.part(step, (phase + within) / len(phases))
+            if time.monotonic() > end + self.paused_for:
                 proc.kill()
         proc.wait()
         self.job.pop("proc", None)
         return proc.returncode, "\n".join(out[-60:])
 
 
+# Share of the whole run each step usually takes (copying is re-weighted by how many frames need copying).
+WEIGHTS = [25, 55, 1, 9, 4, 6]
 STEPS = ["Find and copy the raw frames", "Siril: debayer, register, select frames, stack",
          "Crop the stacking edges", "GraXpert: background extraction", "Siril: plate solve and colour calibration",
          "Siril: finish the plan and save"]
@@ -237,11 +280,17 @@ def _run(j: _Job, a: dict, found: dict) -> None:
 
 
 def _copy_frames(j: _Job, found: dict, lights: Path) -> int:
+    """Copy the missing frames, a few at a time (how many depends on this computer's drive)."""
+    from concurrent.futures import ThreadPoolExecutor
     lights.mkdir(parents=True, exist_ok=True)
     todo = [f for f in found["frames"] if f["source"] != "processing folder"]
+    if not todo:
+        return 0
     base = dwarf._base() if any(f["source"] == "DWARF (Wi-Fi)" for f in todo) else ""
-    done = 0
-    for n, f in enumerate(todo, 1):
+    lock, count = threading.Lock(), [0]
+
+    def one(f):
+        j.wait_if_paused()
         if j.stopped():
             raise ProcessError("Stopped.")
         target, tmp = lights / f["name"], lights / (f["name"] + ".part")
@@ -250,15 +299,25 @@ def _copy_frames(j: _Job, found: dict, lights: Path) -> int:
                 with urllib.request.urlopen(base + urllib.parse.quote(f["where"]), timeout=60) as r, open(tmp, "wb") as o:
                     while chunk := r.read(1 << 20):
                         o.write(chunk)
+                        if tools.PAUSED.is_set():
+                            j.wait_if_paused()
             else:
                 shutil.copyfile(f["where"], tmp)
             tmp.replace(target)
         except OSError as e:
             tmp.unlink(missing_ok=True)
             raise ProcessError(f"Copying {f['name']} failed: {e}")
-        done += 1
-        j.step(0, "running", f"Copied {n} of {len(todo)} frames from the {f['source']}" if n % 10 == 0 or n == len(todo) else "")
-    return done
+        with lock:
+            count[0] += 1
+            n = count[0]
+        j.part(0, n / len(todo))
+        if n % 25 == 0 or n == len(todo):
+            j.log(f"Copied {n} of {len(todo)} frames from the {f['source']}")
+
+    with ThreadPoolExecutor(max_workers=hwprofile.tuning()["parallel_copies"]) as pool:
+        for _ in pool.map(one, todo):
+            pass
+    return count[0]
 
 
 def _pipeline(j: _Job, a: dict, found: dict) -> dict:
@@ -271,6 +330,10 @@ def _pipeline(j: _Job, a: dict, found: dict) -> dict:
         shot = {}
 
     # 1. frames
+    j.weights[0] = round(WEIGHTS[0] * found["bytes_to_copy"] / max(1, found["bytes"]))
+    t = hwprofile.tuning()
+    tune = [f"setcpu {t['siril_threads']}", f"setmem {t['siril_mem_ratio']}"]
+    j.log(hwprofile.profile().get("summary", ""))
     j.step(0, "running", f"{found['count']} frames for {found['session']}" +
            (f" ({found['failed']} the DWARF rejected are included)" if found["failed"] else "") + ".")
     copied = _copy_frames(j, found, lights)
@@ -283,15 +346,16 @@ def _pipeline(j: _Job, a: dict, found: dict) -> dict:
         shutil.rmtree(proc, ignore_errors=True)
     script = work / "overview_stack.ssf"
     script.write_text("\n".join([
-        "# Written by DWARF Overview: restack with frame selection",
-        "requires 1.2.0", "setext fits", "set16bits",
+        "# Written by DWARF Post-Processing Hub: restack with frame selection",
+        "requires 1.2.0", *tune, "setext fits", "set16bits",
         "cd lights", "convert light -debayer -out=../process", "cd ../process",
         "register light -2pass",
         f"seqapplyreg light -filter-wfwhm={plan['keep_percent']}% -filter-round={plan['roundness']} -framing=min",
         "set32bits",
         f"stack r_light rej w {plan['sigma_low']} {plan['sigma_high']} -norm=addscale -output_norm -32b -out=../result_stack",
         ""]), encoding="utf-8")
-    code, tail = j.run(_siril_args(script, work), work)
+    code, tail = j.run(_siril_args(script, work), work, step=1,
+                       phases=["convert", "register", "seqapplyreg", "stack"])
     stacked = work / "result_stack.fits"
     if code != 0 or not stacked.exists():
         raise ProcessError("Siril's restack didn't finish:\n" + tail[-1500:])
@@ -313,16 +377,23 @@ def _pipeline(j: _Job, a: dict, found: dict) -> dict:
         j.step(3, "running")
         corr = gx.get("correction") or "Subtraction"
         smooth = float(gx.get("smoothing") if gx.get("smoothing") is not None else 0.2)
-        code, tail = j.run([exe, str(current), "-cli", "-cmd", "background-extraction", "-correction", corr,
-                            "-smoothing", f"{smooth:.2f}", "-output", str(work / "result_bg")], work, 3600)
+        gpu_args = ["-gpu", "true" if t["graxpert_gpu"] else "false"]
+        args = [exe, str(current), "-cli", "-cmd", "background-extraction", "-correction", corr,
+                "-smoothing", f"{smooth:.2f}", "-output", str(work / "result_bg")]
+        code, tail = j.run(args + gpu_args, work, 3600, step=3, phases=["background"])
+        if code != 0:  # an older GraXpert without the -gpu option
+            code, tail = j.run(args, work, 3600)
         bg = tools._newest_with_stem(work, "result_bg")
         if code != 0 or not bg:
             raise ProcessError("GraXpert's background extraction failed:\n" + tail[-1200:])
         current = Path(bg)
         note = f"{corr}, smoothing {smooth:.2f}."
         if gx.get("run_denoise"):
-            code, tail = j.run([exe, str(current), "-cli", "-cmd", "denoising", "-strength",
-                                f"{float(gx.get('denoise_strength') or 0.5):.2f}", "-output", str(work / "result_dn")], work, 3600)
+            args = [exe, str(current), "-cli", "-cmd", "denoising", "-strength",
+                    f"{float(gx.get('denoise_strength') or 0.5):.2f}", "-output", str(work / "result_dn")]
+            code, tail = j.run(args + gpu_args + ["-batch_size", str(t["graxpert_batch"])], work, 3600)
+            if code != 0:
+                code, tail = j.run(args, work, 3600)
             dn = tools._newest_with_stem(work, "result_dn")
             if code == 0 and dn:
                 current, note = Path(dn), note + " AI denoise too."
@@ -334,7 +405,7 @@ def _pipeline(j: _Job, a: dict, found: dict) -> dict:
     hint = hint_from_shot_info(shot)
     coords = f"{hint['ra']:.5f},{hint['dec']:.5f} " if "ra" in hint else ""
     cal = work / "overview_calibrate.ssf"
-    cal.write_text("\n".join(["requires 1.2.0", f'load "{current.name}"',
+    cal.write_text("\n".join(["requires 1.2.0", *tune, f'load "{current.name}"',
                               f"platesolve {coords}-focal={plan['focal']} -pixelsize={plan['pixel']}", "pcc",
                               "save result_calibrated", ""]), encoding="utf-8")
     code, tail = j.run(_siril_args(cal, work), work, 1800)
@@ -349,7 +420,7 @@ def _pipeline(j: _Job, a: dict, found: dict) -> dict:
     # 6. the rest of the plan
     j.step(5, "running")
     handled = {"platesolve", "pcc", "spcc", "crop", "save", "savetif", "rmgreen", "subsky"}
-    lines = ["requires 1.2.0", f'load "{current.name}"']
+    lines = ["requires 1.2.0", *tune, f'load "{current.name}"']
     notes = []
     if plan["rmgreen"]:
         lines.append("rmgreen 0")

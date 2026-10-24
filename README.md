@@ -1,4 +1,4 @@
-# DWARF Overview
+# DWARF Post-Processing Hub
 
 A small app for your laptop that looks at a DWARF 3 image, measures what needs fixing, asks Claude for a processing plan, and drives GraXpert and Siril for you. Every session is logged, and your ratings feed into the next suggestions.
 
@@ -137,11 +137,15 @@ After **Assess**, the Processing plan has an **Auto-apply plan** button. It show
 5. plate solves and colour calibrates in Siril (this needs internet for the star catalogue, so it's skipped with a note at a dark site);
 6. removes green only if the plan says to, runs the plan's other Siril commands, and saves `result_final` as FITS, TIFF and JPG.
 
+A progress bar shows how far the whole run is and roughly how long is left. **PAUSE ALL** at the top suspends whatever program the app is running (Siril, GraXpert) and holds frame copying; press **RESUME ALL** to carry on exactly where it was.
+
+**Tuned to each computer.** Every time the app starts it measures the computer it's on: processor threads and speed, memory, graphics card, and how fast the processing drive writes. From that it sets how many threads Siril uses (all but one), how much free memory it may take, whether GraXpert's AI runs on the graphics card (and its batch size), how many frames are copied at once, and whether processing runs at raised priority. The Network panel's Hardware usage section shows what it measured and chose.
+
 Each step shows its progress. Nothing on the DWARF or in your library is changed. Afterwards, **Measure the result** assesses the new image, and you can delete Siril's working copies to free space.
 
 ## Diagnose
 
-Click **Diagnose** at the top, say what's going wrong, and leave **Include a screenshot** ticked. Your browser asks which tab to share: pick the DWARF Overview tab. Claude then gets the screenshot plus the app's state:
+Click **Diagnose** at the top, say what's going wrong, and leave **Include a screenshot** ticked. Your browser asks which tab to share: pick the DWARF Post-Processing Hub tab. Claude then gets the screenshot plus the app's state:
 - version and settings, without your API key;
 - the DWARF connection and control link;
 - Dwarfium's status;

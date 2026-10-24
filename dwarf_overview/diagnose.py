@@ -58,7 +58,7 @@ SCHEMA = {
     },
 }
 
-PROMPT = """You are the built-in troubleshooter for DWARF Overview, a Windows desktop helper (Python server plus a page \
+PROMPT = """You are the built-in troubleshooter for DWARF Post-Processing Hub, a Windows desktop helper (Python server plus a page \
 in the browser) for a DWARF 3 smart telescope. Tabs: Assess (measure a photo, Claude plans processing in GraXpert/Siril), \
 Plan & Control (night planner, goto, camera settings, W/A/S/D joystick, live view over RTSP port 554), Telescope \
 (Dwarfium embedded, served at 127.0.0.1:8000 with its DwarfiumProxy helper), From DWARF (sessions over Wi-Fi from the \

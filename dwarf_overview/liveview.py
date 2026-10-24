@@ -21,6 +21,11 @@ SHOW_FPS = 12  # frames per second sent to the page; every frame is still decode
 OPEN_TRIES = 4
 
 
+def _threads() -> int:
+    from .hwprofile import tuning
+    return int(tuning().get("opencv_threads") or 4)
+
+
 class LiveError(Exception):
     pass
 
@@ -46,7 +51,7 @@ class _Reader:
         cap = None
         for attempt in range(OPEN_TRIES):  # the stream takes a moment to start after the camera opens
             params = [getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", 53), 4000, getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", 54), 5000,
-                      getattr(cv2, "CAP_PROP_N_THREADS", 70), min(8, os.cpu_count() or 4)]  # H.265 needs several threads
+                      getattr(cv2, "CAP_PROP_N_THREADS", 70), _threads()]  # H.265 needs several threads
             try:
                 cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG, params)
             except TypeError:  # older OpenCV without open parameters
