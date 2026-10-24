@@ -6,13 +6,19 @@ folder on the telescope (and in the laptop library only if they were copied). Au
 1. finds every raw frame of that session: the library folder, the work folder, the DWARF over USB-C, or the DWARF
    over Wi-Fi. Frames the DWARF rejected (failed_*) are left out unless asked for;
 2. copies the missing ones into the processing folder (Settings), after checking there's room;
-3. Siril: debayer, register (2-pass), keep the best frames (FWHM and roundness from the plan), stack with
-   Winsorized rejection, 32-bit FITS;
+   It also looks for the DWARF's own master dark (CALI_FRAME) for that exposure and gain (darks.py);
+3. Siril: dark subtraction and cosmetic correction (when a dark fits), debayer, register (2-pass), keep the best
+   frames (FWHM and roundness), stack with Winsorized rejection (weighted by sharpness on Siril 1.4), 32-bit;
 4. crops the stacking edges;
-5. GraXpert background extraction (and AI denoise if the plan says so);
-6. Siril: plate solve and photometric colour calibration (skipped with a note if there's no internet for the
-   star catalogue), remove green only if the plan doesn't say to skip it, then the plan's remaining Siril
-   commands, and saves FITS, TIFF and JPG.
+5. GraXpert background extraction;
+6. plate solve (Siril, offline with its local catalogues; ASTAP as the fallback) and colour calibration: SPCC
+   (narrowband mode for the Duo-Band filter), else PCC, else balanced from the image's own stars;
+7. deconvolution (GraXpert AI, else Siril Richardson-Lucy with a PSF from the stars);
+8. noise reduction (GraXpert AI, else Siril's NL-Bayes), strength from how much integration there is;
+9. Siril: the plan's own commands, a linked auto-stretch and saturation;
+10. star reduction (StarNet when installed, else a star mask and erosion), an HOO version for Duo-Band, and
+   TIFF, PNG, JPG and FITS (finishing.py).
+Settings the plan doesn't give are chosen from the data (frame count, integration, filter, object type).
 
 Nothing on the DWARF or in the library is changed or deleted; everything is written to the processing folder.
 """
@@ -30,7 +36,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from . import config, dwarf, history, hwprofile, scope, tools
+from . import config, dwarf, finishing, history, hwprofile, scope, tools
 
 FRAME = re.compile(r"\.(fits?|fts)$", re.I)
 NOT_A_FRAME = re.compile(r"^(stacked|thumbnail|result_|overview_)|_(gx|siril|crop|bg|dn)", re.I)
@@ -130,12 +136,13 @@ def _plan_settings(a: dict) -> dict:
     """Read the numbers the plan gives (frame filtering, rejection, crop, green) with safe defaults."""
     text = json.dumps(a.get("steps", []))
     out = {"keep_percent": 75, "roundness": 0.75, "sigma_low": 3.0, "sigma_high": 3.0, "crop_px": 50,
-           "rmgreen": None, "focal": 150, "pixel": 2.0}
+           "rmgreen": None, "focal": 150, "pixel": 2.0, "_from_plan": set()}
     for s in a.get("steps", []):
         blob = " ".join([s.get("action", ""), s.get("menu_path", "")] + [f"{x['name']} {x['value']}" for x in s.get("settings", [])])
         low = blob.lower()
         if "fwhm" in low and (m := re.search(r"best\s*(\d{2})\s*%", low)):
             out["keep_percent"] = min(95, max(40, int(m.group(1))))
+            out["_from_plan"].add("keep_percent")
         if m := re.search(r"roundness\D{0,12}(0\.\d+)", low):
             out["roundness"] = min(0.95, max(0.3, float(m.group(1))))
         if "rejection" in low and (m := re.search(r"sigma\s*([\d.]+)\s*/\s*([\d.]+)", low)):
@@ -267,10 +274,16 @@ class _Job:
 
 
 # Share of the whole run each step usually takes (copying is re-weighted by how many frames need copying).
-WEIGHTS = [25, 55, 1, 9, 4, 6]
-STEPS = ["Find and copy the raw frames", "Siril: debayer, register, select frames, stack",
-         "Crop the stacking edges", "GraXpert: background extraction", "Siril: plate solve and colour calibration",
-         "Siril: finish the plan and save"]
+WEIGHTS = [20, 50, 1, 6, 5, 5, 6, 4, 3]
+STEPS = ["Find and copy the raw frames and the DWARF's matching dark",
+         "Siril: calibrate, debayer, register, select frames, stack",
+         "Crop the stacking edges", "GraXpert: background extraction",
+         "Plate solve and colour calibration", "Deconvolution (sharpen fine detail)", "Noise reduction",
+         "Siril: stretch, saturation and the plan's own steps", "Star reduction and final save"]
+# Steps of runs saved by older versions, so LAST SESSION still recognises them.
+OLD_LABELS = {"Find and copy the raw frames": 0, "Siril: debayer, register, select frames, stack": 1}
+DUO_BAND = {"rwl": 656.28, "gwl": 500.7, "bwl": 500.7, "bw": 15}
+DWARF3_SENSOR = "Sony IMX678"
 
 
 def start(assessment_id: int, include_failed: bool = False, resume: dict | None = None) -> str:
@@ -351,20 +364,89 @@ def _copy_frames(j: _Job, found: dict, lights: Path) -> int:
     return count[0]
 
 
+_SIRIL_VERSION: dict[str, tuple] = {}
+
+
+def _siril_version() -> tuple:
+    """(major, minor) of siril-cli; 1.4 adds SPCC, offline catalogues and frame weighting."""
+    cli = tools.find_siril()["cli"] or ""
+    if cli not in _SIRIL_VERSION:
+        v = (1, 2)
+        if cli and not cli.startswith("flatpak:"):
+            try:
+                out = subprocess.run([cli, "--version"], capture_output=True, text=True, timeout=20,
+                                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+                if m := re.search(r"(\d+)\.(\d+)", out.stdout + out.stderr):
+                    v = (int(m.group(1)), int(m.group(2)))
+            except (OSError, subprocess.SubprocessError):
+                pass
+        _SIRIL_VERSION[cli] = v
+    return _SIRIL_VERSION[cli]
+
+
+def _duo_band(shot: dict, found: dict) -> bool:
+    text = (json.dumps(shot) + " " + " ".join(f["name"] for f in found["frames"][:5])).lower()
+    return any(w in text for w in ("duo", "dual", "dualband", "duo-band", "narrowband"))
+
+
+def _shot_temp(shot: dict, found: dict) -> float | None:
+    for k, v in shot.items():
+        if "temp" in k.lower():
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                pass
+    for f in found["frames"][:3]:
+        if m := re.search(r"_(-?\d{1,2})C[_.]", f["name"]):
+            return float(m.group(1))
+    return None
+
+
+def _recommend(plan: dict, a: dict, found: dict, shot: dict) -> dict:
+    """Settings for the steps the plan doesn't pin down, chosen from the data: how many frames, total
+    integration, the filter, and what kind of object it is."""
+    assess = a["assessment"]
+    gx = assess.get("graxpert") or {}
+    m = re.search(r"EXP_([\d.]+)", found["session"], re.I)
+    exp = float(m.group(1)) if m else 15.0
+    minutes = found["count"] * exp / 60
+    kind = ((assess.get("identification") or {}).get("object_type") or "").lower()
+    r = {"minutes": minutes, "duo": _duo_band(shot, found), "kind": kind}
+    if "keep_percent" not in plan["_from_plan"]:
+        r["keep_percent"] = 90 if found["count"] < 50 else 80 if found["count"] < 300 else 75
+    if gx.get("run_denoise") and gx.get("denoise_strength") is not None:
+        r["denoise"] = float(gx["denoise_strength"])
+    else:  # less integration = more noise = stronger denoise
+        r["denoise"] = 0.6 if minutes < 20 else 0.5 if minutes < 60 else 0.4 if minutes < 180 else 0.3
+    if "cluster" in kind:
+        r["stars"] = 0.0  # the stars are the subject
+    elif "galaxy" in kind:
+        r["stars"] = 0.4
+    else:
+        r["stars"] = 0.7  # nebulae: let the gas show through the star field
+    r["deconv"] = 0.5 if minutes >= 30 else 0.3  # gentle on noisy data
+    return r
+
+
 def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict:
     plan = _plan_settings(a["assessment"])
     work = Path(found["work_folder"])
-    prev_steps = (resume or {}).get("steps") or []
     prev_out = (resume or {}).get("outputs") or {}
+    prev = {}
+    for s in (resume or {}).get("steps") or []:
+        n = STEPS.index(s["label"]) if s.get("label") in STEPS else OLD_LABELS.get(s.get("label"))
+        if n is not None:
+            prev[n] = s
 
     def reuse(n: int, key: str | None) -> str | bool | None:
         """For LAST SESSION: a step that finished last time and whose file is still there isn't redone."""
-        if n >= len(prev_steps) or prev_steps[n].get("state") not in ("done", "skipped"):
+        s = prev.get(n)
+        if not s or s.get("state") not in ("done", "skipped"):
             return None
         path = prev_out.get(key) if key else None
-        if key and prev_steps[n]["state"] == "done" and not (path and Path(path).exists()):
+        if key and s["state"] == "done" and not (path and Path(path).exists()):
             return None  # its file is gone: redo the step
-        j.step(n, prev_steps[n]["state"], (prev_steps[n].get("note") or "") + " (kept from the last session)")
+        j.step(n, s["state"], (s.get("note") or "").replace(" (kept from the last session)", "") + " (kept from the last session)")
         if path:
             j.outputs[key] = path
         return path or True
@@ -374,23 +456,28 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
         shot = json.loads((_session_of(Path(a["file_path"]))[1] / "shotsInfo.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         shot = {}
+    rec = _recommend(plan, a, found, shot)
+    plan.update({k: v for k, v in rec.items() if k == "keep_percent"})
+    v14 = _siril_version() >= (1, 4)
 
-    # 1. frames
-    j.weights[0] = round(WEIGHTS[0] * found["bytes_to_copy"] / max(1, found["bytes"]))
+    # 1. frames, and the DWARF's master dark
+    j.weights[0] = max(1, round(WEIGHTS[0] * found["bytes_to_copy"] / max(1, found["bytes"])))
     t = hwprofile.tuning()
     tune = [f"setcpu {t['siril_threads']}", f"setmem {t['siril_mem_ratio']}"]
     j.log(hwprofile.profile().get("summary", ""))
+    j.log(f"Siril {'.'.join(map(str, _siril_version()))}; {found['count']} frames, {rec['minutes']:.0f} min of "
+          f"integration{', Duo-Band filter (Hα + OIII)' if rec['duo'] else ''}"
+          f"{', ' + rec['kind'] if rec['kind'] else ''}.")
     j.step(0, "running", f"{found['count']} frames for {found['session']}" +
            (f" ({found['failed']} the DWARF rejected are included)" if found["failed"] else "") + ".")
     copied = _copy_frames(j, found, lights)
-    j.step(0, "done", f"{found['count']} frames ready in {lights} ({copied} copied).")
+    dark_note = _master_dark(j, found, shot, work, lights)
+    j.step(0, "done", f"{found['count']} frames ready in {lights} ({copied} copied). {dark_note}")
 
     # 2. restack
     stacked = work / "result_stack.fits"
-    if reuse(1, "stacked"):
-        pass
-    else:
-        _restack(j, plan, work, proc, tune)
+    if not reuse(1, "stacked"):
+        _restack(j, plan, work, proc, tune, (work / "master_dark.fits").exists(), v14)
         j.outputs["stacked"] = str(stacked)
         j.step(1, "done", f"Stacked: {stacked}")
 
@@ -402,141 +489,329 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
         j.outputs["cropped"] = str(cropped)
         j.step(2, "done", f"Cropped {plan['crop_px']} px off each edge.")
 
-    # 4. GraXpert
     gx = a["assessment"].get("graxpert") or {}
-    current = cropped
     exe = tools.find_graxpert()
-    kept = reuse(3, "graxpert")
-    if kept:
-        current = Path(kept) if isinstance(kept, str) else current
-    elif not exe:
-        j.step(3, "skipped", "GraXpert wasn't found (set it in Settings), so background extraction was skipped.")
-    else:
-        current = _graxpert(j, gx, exe, current, work, t)
 
-    # 5. plate solve + colour calibration (needs the online star catalogue; skip if it fails)
-    kept = reuse(4, "calibrated")
-    if kept:
-        current = Path(kept) if isinstance(kept, str) else current
-    else:
-        current = _calibrate(j, plan, shot, current, work, tune)
-    return _finish(j, a, plan, current, work, proc, found, tune)
+    def carry(n, key, current, run):
+        kept = reuse(n, key)
+        if kept:
+            return Path(kept) if isinstance(kept, str) else current
+        return run(current)
+
+    current = cropped
+    # 4. GraXpert background extraction
+    current = carry(3, "graxpert", current, lambda c: _graxpert(j, gx, exe, c, work, t) if exe else
+                    (j.step(3, "skipped", "GraXpert wasn't found (set it in Settings), so background extraction was skipped.") or c))
+    # 5. plate solve + colour
+    current = carry(4, "calibrated", current, lambda c: _calibrate(j, plan, shot, c, work, tune, rec, v14))
+    # 6. deconvolution
+    current = carry(5, "deconvolved", current, lambda c: _deconvolve(j, exe, c, work, tune, t, rec))
+    # 7. noise reduction
+    current = carry(6, "denoised", current, lambda c: _denoise(j, exe, c, work, tune, t, rec))
+    # 8. stretch and the plan's own commands
+    calibrated = (j.job["steps"][4]["state"] == "done")
+    stretched = carry(7, "stretched", current, lambda c: _stretch(j, a, plan, c, work, tune, rec, calibrated))
+    # 9. star reduction and saving
+    return _finish(j, stretched, work, proc, found, rec)
 
 
-def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str]) -> None:
-    j.step(1, "running", f"Keeping the best {plan['keep_percent']}% by FWHM with roundness above {plan['roundness']}; "
-                         f"Winsorized rejection {plan['sigma_low']}/{plan['sigma_high']}.")
-    if proc.exists():
-        shutil.rmtree(proc, ignore_errors=True)
-    script = work / "overview_stack.ssf"
-    script.write_text("\n".join([
-        "# Written by DWARF Post-Processing Hub: restack with frame selection",
-        "requires 1.2.0", *tune, "setext fits", "set16bits",
-        "cd lights", "convert light -debayer -out=../process", "cd ../process",
-        "register light -2pass",
-        f"seqapplyreg light -filter-wfwhm={plan['keep_percent']}% -filter-round={plan['roundness']} -framing=min",
-        "set32bits",
-        f"stack r_light rej w {plan['sigma_low']} {plan['sigma_high']} -norm=addscale -output_norm -32b -out=../result_stack",
-        ""]), encoding="utf-8")
-    (work / "result_stack.fits").unlink(missing_ok=True)
-    code, tail = j.run(_siril_args(script, work), work, step=1,
-                       phases=["convert", "register", "seqapplyreg", "stack"])
-    if code != 0 or not (work / "result_stack.fits").exists():
-        raise ProcessError("Siril's restack didn't finish:\n" + tail[-1500:])
+def _master_dark(j: _Job, found: dict, shot: dict, work: Path, lights: Path) -> str:
+    from . import darks
+    target = work / "master_dark.fits"
+    sample = next((f for f in sorted(lights.iterdir()) if FRAME.search(f.name)), None) if lights.is_dir() else None
+    if not sample:
+        return ""
+    try:
+        c = darks.pick(found["session"], _shot_temp(shot, found))
+    except Exception as e:  # never stop the run over the dark
+        return f"Couldn't look for the DWARF's darks ({e}); stacking without one."
+    if not c:
+        target.unlink(missing_ok=True)
+        return ("No DWARF master dark matches this exposure and gain (CALI_FRAME on the DWARF), so the stack "
+                "relies on rejection for hot pixels.")
+    try:
+        f = darks.fetch(c, work_root() / "_darks")
+        why = darks.prepare(f, sample, target)
+        return f"Using the DWARF's master dark {c['name']} ({c['stack']} darks at {c['temp']}°C; {why})."
+    except Exception as e:
+        target.unlink(missing_ok=True)
+        return f"Found the DWARF's dark {c['name']} but didn't use it: {e}."
+
+
+def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str], dark: bool, v14: bool) -> None:
+    j.step(1, "running", f"{'Dark-subtracting with cosmetic correction, then k' if dark else 'K'}eeping the best "
+                         f"{plan['keep_percent']}% by FWHM with roundness above {plan['roundness']}; "
+                         f"Winsorized rejection {plan['sigma_low']}/{plan['sigma_high']}"
+                         f"{', frames weighted by their sharpness' if v14 else ''}.")
+    for use_dark in ([True, False] if dark else [False]):
+        if proc.exists():
+            shutil.rmtree(proc, ignore_errors=True)
+        seq = "pp_light" if use_dark else "light"
+        prep = (["convert light -out=../process", "cd ../process",
+                 "calibrate light -dark=../master_dark.fits -cc=dark -cfa -debayer"] if use_dark else
+                ["convert light -debayer -out=../process", "cd ../process"])
+        script = work / "overview_stack.ssf"
+        script.write_text("\n".join([
+            "# Written by DWARF Post-Processing Hub: restack with frame selection",
+            "requires 1.2.0", *tune, "setext fits", "set16bits", "cd lights", *prep,
+            f"register {seq} -2pass",
+            f"seqapplyreg {seq} -filter-wfwhm={plan['keep_percent']}% -filter-round={plan['roundness']} -framing=min",
+            "set32bits",
+            f"stack r_{seq} rej w {plan['sigma_low']} {plan['sigma_high']} -norm=addscale -output_norm"
+            f"{' -weight=wfwhm' if v14 else ''} -32b -out=../result_stack",
+            ""]), encoding="utf-8")
+        (work / "result_stack.fits").unlink(missing_ok=True)
+        code, tail = j.run(_siril_args(script, work), work, step=1,
+                           phases=["convert", "calibrate", "register", "seqapplyreg", "stack"] if use_dark else
+                           ["convert", "register", "seqapplyreg", "stack"])
+        if code == 0 and (work / "result_stack.fits").exists():
+            return
+        if use_dark and not j.stopped():
+            j.log("Calibrating with the dark didn't work in Siril; stacking again without it.")
+    raise ProcessError("Siril's restack didn't finish:\n" + tail[-1500:])
+
+
+def _gx_run(j: _Job, exe: str, current: Path, work: Path, t: dict, cmd: list[str], stem: str, step: int,
+            batch: bool = False, timeout: float = 3600) -> tuple[Path | None, str]:
+    """Run one GraXpert command on the graphics card when this computer has a suitable one, falling back to
+    the call an older GraXpert understands."""
+    base = [exe, str(current), "-cli", "-cmd", *cmd, "-output", str(work / stem)]
+    extra = ["-gpu", "true" if t["graxpert_gpu"] else "false"] + (["-batch_size", str(t["graxpert_batch"])] if batch else [])
+    for f in work.glob(stem + ".*"):
+        f.unlink(missing_ok=True)
+    code, tail = j.run(base + extra, work, timeout, step=step, phases=[cmd[0]])
+    if code != 0 and not j.stopped():
+        code, tail = j.run(base, work, timeout)
+    out = tools._newest_with_stem(work, stem)
+    return (Path(out) if code == 0 and out else None), tail
 
 
 def _graxpert(j: _Job, gx: dict, exe: str, current: Path, work: Path, t: dict) -> Path:
     j.step(3, "running")
     corr = gx.get("correction") or "Subtraction"
     smooth = float(gx.get("smoothing") if gx.get("smoothing") is not None else 0.2)
-    gpu_args = ["-gpu", "true" if t["graxpert_gpu"] else "false"]
-    args = [exe, str(current), "-cli", "-cmd", "background-extraction", "-correction", corr,
-            "-smoothing", f"{smooth:.2f}", "-output", str(work / "result_bg")]
-    code, tail = j.run(args + gpu_args, work, 3600, step=3, phases=["background"])
-    if code != 0:  # an older GraXpert without the -gpu option
-        code, tail = j.run(args, work, 3600)
-    bg = tools._newest_with_stem(work, "result_bg")
-    if code != 0 or not bg:
+    out, tail = _gx_run(j, exe, current, work, t, ["background-extraction", "-correction", corr,
+                                                   "-smoothing", f"{smooth:.2f}"], "result_bg", 3)
+    if not out:
         raise ProcessError("GraXpert's background extraction failed:\n" + tail[-1200:])
-    current = Path(bg)
-    note = f"{corr}, smoothing {smooth:.2f}."
-    if gx.get("run_denoise"):
-        args = [exe, str(current), "-cli", "-cmd", "denoising", "-strength",
-                f"{float(gx.get('denoise_strength') or 0.5):.2f}", "-output", str(work / "result_dn")]
-        code, tail = j.run(args + gpu_args + ["-batch_size", str(t["graxpert_batch"])], work, 3600)
-        if code != 0:
-            code, tail = j.run(args, work, 3600)
-        dn = tools._newest_with_stem(work, "result_dn")
-        if code == 0 and dn:
-            current, note = Path(dn), note + " AI denoise too."
-    j.outputs["graxpert"] = str(current)
-    j.step(3, "done", note)
-    return current
+    j.outputs["graxpert"] = str(out)
+    j.step(3, "done", f"{corr}, smoothing {smooth:.2f}{', on the graphics card' if t['graxpert_gpu'] else ''}.")
+    return out
 
 
-def _calibrate(j: _Job, plan: dict, shot: dict, current: Path, work: Path, tune: list[str]) -> Path:
+def _siril_try(j: _Job, work: Path, tune: list[str], body: list[str], out_name: str, name: str,
+               timeout: float = 1800) -> tuple[bool, str]:
+    script = work / f"overview_{name}.ssf"
+    script.write_text("\n".join(["requires 1.2.0", *tune, *body, f"save {out_name}", ""]), encoding="utf-8")
+    (work / f"{out_name}.fits").unlink(missing_ok=True)
+    code, tail = j.run(_siril_args(script, work), work, timeout)
+    return code == 0 and (work / f"{out_name}.fits").exists(), tail
+
+
+def _has_wcs(path: Path) -> bool:
+    try:
+        from astropy.io import fits
+        h = fits.getheader(path)
+        return "CRVAL1" in h and ("CD1_1" in h or "CDELT1" in h or "PC1_1" in h)
+    except OSError:
+        return False
+
+
+def _astap_solve(j: _Job, src: Path, dst: Path, plan: dict, hint: dict) -> bool:
+    from .platesolve import find_astap
+    exe = find_astap()
+    if not exe:
+        return False
+    shutil.copyfile(src, dst)
+    try:
+        from astropy.io import fits
+        height = fits.getheader(dst).get("NAXIS2") or 2000
+    except OSError:
+        height = 2000
+    fov = height * 206.265 * plan["pixel"] / plan["focal"] / 3600
+    args = [exe, "-f", str(dst), "-update", "-fov", f"{fov:.3f}", "-z", "0"]
+    args += (["-ra", f"{hint['ra'] / 15:.5f}", "-spd", f"{hint['dec'] + 90:.5f}", "-r", "15"] if "ra" in hint else ["-r", "180"])
+    j.run(args, dst.parent, 600)
+    return _has_wcs(dst)
+
+
+def _calibrate(j: _Job, plan: dict, shot: dict, current: Path, work: Path, tune: list[str], rec: dict, v14: bool) -> Path:
     j.step(4, "running")
     from .platesolve import hint_from_shot_info
     hint = hint_from_shot_info(shot)
     coords = f"{hint['ra']:.5f},{hint['dec']:.5f} " if "ra" in hint else ""
-    cal = work / "overview_calibrate.ssf"
-    cal.write_text("\n".join(["requires 1.2.0", *tune, f'load "{current.name}"',
-                              f"platesolve {coords}-focal={plan['focal']} -pixelsize={plan['pixel']}", "pcc",
-                              "save result_calibrated", ""]), encoding="utf-8")
-    code, tail = j.run(_siril_args(cal, work), work, 1800)
-    if code == 0 and (work / "result_calibrated.fits").exists():
-        current = work / "result_calibrated.fits"
-        j.outputs["calibrated"] = str(current)
-        j.step(4, "done", "Plate solved and colour calibrated.")
-    else:
-        j.step(4, "skipped", "Plate solve or colour calibration didn't work (it needs internet for the star "
-                             "catalogue), so colours were left as they are. Siril said: " +
-                 (tail.strip().splitlines() or [""])[-1][:200])
+    solved = work / "result_solved.fits"
+    # Plate solve: Siril first (offline with its local Gaia catalogues on 1.4), then ASTAP.
+    ok, tail = _siril_try(j, work, tune, [f'load "{current.name}"',
+                                          f"platesolve {coords}-focal={plan['focal']} -pixelsize={plan['pixel']}"],
+                          "result_solved", "solve")
+    how = "Siril"
+    if not ok or not _has_wcs(solved):
+        how = "ASTAP" if _astap_solve(j, current, solved, plan, hint) else ""
+    if not how:
+        note = finishing.colour_balance(current, work / "result_calibrated.fits")
+        j.outputs["calibrated"] = str(work / "result_calibrated.fits")
+        j.step(4, "done", "Couldn't plate solve (Siril and ASTAP), so the colour was calibrated from the image's "
+                          f"own stars instead: {note}.")
+        return work / "result_calibrated.fits"
+    # Colour: SPCC (Siril 1.4; narrowband mode for the Duo-Band filter), then PCC, then from the stars.
+    nb = DUO_BAND
+    tries = []
+    if v14:
+        sensor = f'"-oscsensor={DWARF3_SENSOR}"'
+        if rec["duo"]:
+            narrow = (f"spcc -narrowband -rwl={nb['rwl']} -rbw={nb['bw']} -gwl={nb['gwl']} -gbw={nb['bw']} "
+                      f"-bwl={nb['bwl']} -bbw={nb['bw']}")
+            tries += [(f"{narrow} {sensor}", "SPCC in narrowband mode (Hα 656 nm, OIII 501 nm)"),
+                      (narrow, "SPCC in narrowband mode (Hα 656 nm, OIII 501 nm)")]
+        else:
+            tries += [(f"spcc {sensor}", "SPCC with the DWARF 3's sensor"), ("spcc", "SPCC")]
+    tries.append(("pcc", "photometric colour calibration (PCC)"))
+    for cmd, label in tries:
+        ok, tail = _siril_try(j, work, tune, ['load "result_solved"', cmd], "result_calibrated", "colour")
+        if ok:
+            j.outputs["calibrated"] = str(work / "result_calibrated.fits")
+            j.step(4, "done", f"Plate solved with {how}; colour by {label}.")
+            return work / "result_calibrated.fits"
+    note = finishing.colour_balance(solved, work / "result_calibrated.fits")
+    j.outputs["calibrated"] = str(work / "result_calibrated.fits")
+    j.step(4, "done", f"Plate solved with {how}, but Siril's colour calibration didn't run "
+                      f"({(tail.strip().splitlines() or [''])[-1][:160]}), so the colour came from the image's own stars: {note}.")
+    return work / "result_calibrated.fits"
+
+
+def _deconvolve(j: _Job, exe: str | None, current: Path, work: Path, tune: list[str], t: dict, rec: dict) -> Path:
+    j.step(5, "running")
+    if exe:
+        out, _ = _gx_run(j, exe, current, work, t, ["deconv-obj", "-strength", f"{rec['deconv']:.2f}"],
+                         "result_deconv", 5, batch=True, timeout=1800)
+        if out:
+            j.outputs["deconvolved"] = str(out)
+            j.step(5, "done", f"GraXpert AI deconvolution, strength {rec['deconv']:.2f}.")
+            return out
+        j.log("GraXpert's deconvolution isn't available here (it needs its AI model); using Siril's instead.")
+    iters = 10 if rec["deconv"] >= 0.5 else 6
+    ok, tail = _siril_try(j, work, tune, [f'load "{current.name}"', "makepsf stars -sym",
+                                          f"rl -alpha=3000 -iters={iters}"], "result_deconv", "deconv")
+    if ok:
+        j.outputs["deconvolved"] = str(work / "result_deconv.fits")
+        j.step(5, "done", f"Siril Richardson-Lucy with a PSF measured from the stars, {iters} iterations.")
+        return work / "result_deconv.fits"
+    j.step(5, "skipped", "Neither GraXpert nor Siril could deconvolve this image, so it was left as it is.")
     return current
 
 
-def _finish(j: _Job, a: dict, plan: dict, current: Path, work: Path, proc: Path, found: dict, tune: list[str]) -> dict:
+def _denoise(j: _Job, exe: str | None, current: Path, work: Path, tune: list[str], t: dict, rec: dict) -> Path:
+    j.step(6, "running")
+    if exe:
+        out, _ = _gx_run(j, exe, current, work, t, ["denoising", "-strength", f"{rec['denoise']:.2f}"],
+                         "result_dn", 6, batch=True)
+        if out:
+            j.outputs["denoised"] = str(out)
+            j.step(6, "done", f"GraXpert AI denoise, strength {rec['denoise']:.2f} (for {rec['minutes']:.0f} min of data).")
+            return out
+    mod = min(1.0, rec["denoise"] + 0.3)
+    ok, tail = _siril_try(j, work, tune, [f'load "{current.name}"', f"denoise -mod={mod:.2f}"], "result_dn", "denoise", 3600)
+    if ok:
+        j.outputs["denoised"] = str(work / "result_dn.fits")
+        j.step(6, "done", f"Siril's denoise (NL-Bayes), modulation {mod:.2f}.")
+        return work / "result_dn.fits"
+    j.step(6, "skipped", "Neither GraXpert nor Siril could denoise this image, so it was left as it is.")
+    return current
 
-    # 6. the rest of the plan
-    j.step(5, "running")
-    handled = {"platesolve", "pcc", "spcc", "crop", "save", "savetif", "rmgreen", "subsky"}
-    lines = ["requires 1.2.0", *tune, f'load "{current.name}"']
+
+def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list[str], rec: dict, calibrated: bool) -> Path:
+    j.step(7, "running")
+    handled = {"platesolve", "pcc", "spcc", "crop", "save", "savetif", "rmgreen", "subsky", "denoise", "starnet", "rl"}
+    lines = ["requires 1.2.0", *tune, f'load "{current.name}"', "save result_linear"]
     notes = []
-    if plan["rmgreen"]:
+    if plan["rmgreen"] and not rec["duo"]:
         lines.append("rmgreen 0")
         notes.append("removed green (average neutral)")
-    else:
-        notes.append("skipped Remove Green, as the plan says")
+    elif rec["duo"]:
+        notes.append("kept the green, since OIII from the Duo-Band filter is green-blue")
     extra = [c for c in a["assessment"].get("siril_script", []) if c.get("command") not in handled
              and tools._ARG_OK.match((c.get("args") or "").strip())]
-    lines += ["save result_linear"]
     for c in extra:
         lines.append(f"{c['command']} {(c.get('args') or '').strip()}".rstrip())
+    stretch = ["autostretch -linked -2.8 0.20" if calibrated else "autostretch -2.8 0.20"]
     if not any(c["command"] in ("autostretch", "asinh", "ght") for c in extra):
-        lines.append("autostretch")
-    lines += ["save result_final", "savetif result_final", "savejpg result_final 95", ""]
-    fin = work / "overview_finish.ssf"
+        lines += stretch
+        notes.append(f"{'linked' if calibrated else 'per-channel'} auto-stretch to a 20% background")
+    if not any(c["command"] == "satu" for c in extra):
+        lines.append("satu 0.3")
+        notes.append("saturation +0.3")
+    lines += ["save result_stretched", "savetif result_stretched", ""]
+    fin = work / "overview_stretch.ssf"
     fin.write_text("\n".join(lines), encoding="utf-8")
     code, tail = j.run(_siril_args(fin, work), work, 3600)
-    final = work / "result_final.tif"
-    if (code != 0 or not final.exists()) and extra:
-        # One of the plan's own commands didn't suit this Siril; save with a plain auto-stretch instead.
-        j.log("A plan command failed in Siril; saving with a plain auto-stretch instead.")
+    out = work / "result_stretched.tif"
+    if (code != 0 or not out.exists()) and extra:
+        # One of the plan's own commands didn't suit this Siril; use the standard stretch instead.
+        j.log("A plan command failed in Siril; stretching with the standard settings instead.")
         keep = [ln for ln in lines if not any(ln.startswith(c["command"] + " ") or ln == c["command"] for c in extra)]
-        keep.insert(keep.index("save result_final"), "autostretch") if "autostretch" not in keep else None
+        if not any(ln.startswith("autostretch") for ln in keep):
+            keep.insert(keep.index("save result_stretched"), stretch[0])
+        if "satu 0.3" not in keep:
+            keep.insert(keep.index("save result_stretched"), "satu 0.3")
         fin.write_text("\n".join(keep), encoding="utf-8")
-        notes.append(f"the plan's {', '.join(c['command'] for c in extra)} didn't run in Siril, so it used a plain auto-stretch")
+        notes.append(f"the plan's {', '.join(c['command'] for c in extra)} didn't run in Siril, so it used the standard stretch")
         extra = []
         code, tail = j.run(_siril_args(fin, work), work, 3600)
-    if code != 0 or not final.exists():
-        raise ProcessError("Siril couldn't finish the plan:\n" + tail[-1200:])
+    if code != 0 or not out.exists():
+        raise ProcessError("Siril couldn't stretch the image:\n" + tail[-1200:])
     if extra:
-        notes.append("ran " + ", ".join(c["command"] for c in extra))
+        notes.append("ran the plan's " + ", ".join(c["command"] for c in extra))
     msg = "; ".join(notes)
-    j.step(5, "done", msg[:1].upper() + msg[1:] + ".")
-    j.outputs["final"] = str(final)
-    return {"final": str(final), "linear": str(work / "result_linear.fits"), "folder": str(work),
-            "frames": found["count"], "cleanup_bytes": _folder_bytes(proc)}
+    j.outputs["stretched"] = str(out)
+    j.step(7, "done", msg[:1].upper() + msg[1:] + ".")
+    return out
+
+
+def _starnet(j: _Job, src: Path, dst: Path) -> bool:
+    exe = tools.find_tool("starnet")
+    if not exe:
+        return False
+    dst.unlink(missing_ok=True)
+    for args in ([exe, "-i", str(src), "-o", str(dst)], [exe, str(src), str(dst), "256"]):
+        j.run(args, Path(exe).parent, 1800)  # StarNet looks for its weights next to itself
+        if dst.exists():
+            return True
+    return False
+
+
+def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: dict) -> dict:
+    j.step(8, "running")
+    img = finishing.read_tif(stretched)
+    header = None
+    try:
+        header = finishing.read_fits_rgb(work / "result_stretched.fits")[1]
+    except OSError:
+        pass
+    notes = []
+    if rec["stars"] <= 0:
+        notes.append("left the stars alone, as they're the subject")
+    else:
+        starless = None
+        if _starnet(j, stretched, work / "result_starless.tif"):
+            starless = finishing.read_tif(work / "result_starless.tif")
+            notes.append(f"StarNet separated the stars, which were dimmed by {int(rec['stars'] * 60)}% "
+                         "(the starless image is kept too)")
+        else:
+            notes.append(f"stars shrunk with a star mask and erosion (amount {rec['stars']:.1f}); install StarNet "
+                         "for a cleaner star reduction")
+        img = finishing.reduce_stars(img, rec["stars"], starless)
+    saved = finishing.save_final(img, work / "result_final", header)
+    out = {"final": saved["tif"], "linear": str(work / "result_linear.fits"), "folder": str(work),
+           "frames": found["count"], "cleanup_bytes": _folder_bytes(proc), "files": saved}
+    if rec["duo"]:
+        out["hoo"] = finishing.save_final(finishing.hoo(img), work / "result_hoo", header)["tif"]
+        notes.append("an HOO (Hα red, OIII teal) version is saved as result_hoo too")
+    notes.append("saved TIFF (16-bit), PNG, JPG and FITS")
+    msg = "; ".join(notes)
+    j.outputs["final"] = saved["tif"]
+    j.step(8, "done", msg[:1].upper() + msg[1:] + ".")
+    return out
 
 
 def _crop(src: Path, dst: Path, margin: int) -> None:

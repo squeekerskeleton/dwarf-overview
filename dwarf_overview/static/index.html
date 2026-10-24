@@ -195,7 +195,7 @@
         <div id="autoBox" style="margin-bottom:10px;padding:10px;border:1px solid var(--accent);border-radius:8px">
           <div class="row"><button class="primary" id="autoRun">Auto-apply plan</button>
             <label style="display:inline-flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="autoFailed" style="width:auto"> Include frames the DWARF rejected</label></div>
-          <div id="autoFrames" class="caption">Restacks every raw frame of this session, then runs each step below. Your originals are never changed.</div>
+          <div id="autoFrames" class="caption">Runs the whole pipeline on every raw frame of this session: the DWARF's dark, stack, crop, background extraction, plate solve and colour calibration, deconvolution, noise reduction, stretch and star reduction, with settings chosen from your data. Your originals are never changed.</div>
           <div id="autoProg" class="hidden" style="margin-top:8px"><div class="row" style="justify-content:space-between"><b id="autoPct">0%</b><span class="caption" id="autoEta"></span></div>
             <div class="hwbar" style="height:12px"><span id="autoBar" style="width:0%"></span></div></div>
           <div id="autoSteps" style="margin-top:6px"></div>
@@ -437,6 +437,7 @@
   <label>Theme: primary colour <span class="caption">(highlights, active tabs, links)</span></label><div class="swatches" id="swPrimary"></div>
   <label>Secondary colour <span class="caption">(main buttons, schedule bars)</span></label><div class="swatches" id="swSecondary"></div>
   <label for="astapPath">ASTAP plate solver (leave blank to auto-detect)</label><input id="astapPath">
+  <label for="starnetPath">StarNet++ command-line program (leave blank to auto-detect)</label><input id="starnetPath" placeholder="C:\Program Files\StarNet\starnet++.exe">
   <label for="dwarfiumPath">Dwarfium desktop app (leave blank to auto-detect)</label><input id="dwarfiumPath">
   <label for="dwarfiumWeb">Dwarfium web address (for the Telescope tab)</label><input id="dwarfiumWeb" placeholder="http://127.0.0.1:8000">
   <label for="updateUrl">Update source (latest.json address)</label><input id="updateUrl">
@@ -510,7 +511,7 @@ $("settingsBtn").onclick = () => {
   $("model").value = cfg.model; $("effort").value = cfg.effort; $("sirilPath").value = cfg.siril_path;
   $("gxPath").value = cfg.graxpert_path; $("startFolder").value = cfg.start_folder;
   $("ppPath").value = cfg.pipp_path; $("asPath").value = cfg.autostakkert_path; $("rxPath").value = cfg.registax_path;
-  $("dwarfIp").value = cfg.dwarf_ip; $("siteLat").value = cfg.site_lat; $("siteLon").value = cfg.site_lon; $("siteName").value = cfg.site_name || ""; $("projFolder").value = cfg.projects_folder || ""; drawSwatches(); $("siteStatus").textContent = ""; $("libFolder").value = cfg.library_folder; $("workFolder").value = cfg.work_folder || ""; $("dwarfiumPath").value = cfg.dwarfium_path; $("astapPath").value = cfg.astap_path; $("dwarfiumWeb").value = cfg.dwarfium_web_url; $("updateUrl").value = cfg.update_url;
+  $("dwarfIp").value = cfg.dwarf_ip; $("siteLat").value = cfg.site_lat; $("siteLon").value = cfg.site_lon; $("siteName").value = cfg.site_name || ""; $("projFolder").value = cfg.projects_folder || ""; drawSwatches(); $("siteStatus").textContent = ""; $("libFolder").value = cfg.library_folder; $("workFolder").value = cfg.work_folder || ""; $("dwarfiumPath").value = cfg.dwarfium_path; $("astapPath").value = cfg.astap_path; $("starnetPath").value = cfg.starnet_path || ""; $("dwarfiumWeb").value = cfg.dwarfium_web_url; $("updateUrl").value = cfg.update_url;
   $("imPath").value = cfg.imppg_path; $("otherName").value = cfg.other_app_name; $("otherPath").value = cfg.other_app_path;
   const t = cfg.tools, f = (v) => v ? '<span class="ok">found</span>' : '<span class="error">not found</span>';
   $("toolStatus").innerHTML = `GraXpert: ${f(t.graxpert)} &middot; Siril: ${f(t.siril)} &middot; siril-cli: ${f(t.siril_cli)}<br>ASTAP: ${f(t.astap)} &middot; Dwarfium: ${f(t.dwarfium)} &middot; PIPP: ${f(t.pipp)} &middot; AutoStakkert: ${f(t.autostakkert)} &middot; RegiStax: ${f(t.registax)} &middot; ImPPG: ${f(t.imppg)}<br>Data folder: ${esc(cfg.data_dir)}`;
@@ -522,7 +523,7 @@ $("saveSettings").onclick = async () => {
     siril_path: $("sirilPath").value.trim(), graxpert_path: $("gxPath").value.trim(), start_folder: $("startFolder").value.trim(),
     pipp_path: $("ppPath").value.trim(), autostakkert_path: $("asPath").value.trim(), registax_path: $("rxPath").value.trim(),
     imppg_path: $("imPath").value.trim(), dwarf_ip: $("dwarfIp").value.trim(), site_lat: $("siteLat").value.trim(), site_lon: $("siteLon").value.trim(), site_name: $("siteName").value.trim(), projects_folder: $("projFolder").value.trim(), theme_primary: themePick.primary, theme_secondary: themePick.secondary, library_folder: $("libFolder").value.trim(), work_folder: $("workFolder").value.trim(),
-    dwarfium_path: $("dwarfiumPath").value.trim(), astap_path: $("astapPath").value.trim(), dwarfium_web_url: $("dwarfiumWeb").value.trim(), update_url: $("updateUrl").value.trim(), other_app_name: $("otherName").value.trim(), other_app_path: $("otherPath").value.trim() });
+    dwarfium_path: $("dwarfiumPath").value.trim(), astap_path: $("astapPath").value.trim(), starnet_path: $("starnetPath").value.trim(), dwarfium_web_url: $("dwarfiumWeb").value.trim(), update_url: $("updateUrl").value.trim(), other_app_name: $("otherName").value.trim(), other_app_path: $("otherPath").value.trim() });
   $("settings").close(); loadConfig();
 };
 $("siteHere").onclick = () => {
@@ -787,7 +788,7 @@ async function watchAuto(job_id, px = "auto") {
     const box = $(px + "Frames");
     if (j.state === "done") {
       const o = j.output; latestOutput = o.final;
-      box.innerHTML = `<span class="ok">Done.</span> ${o.frames} frames processed. Result: ${esc(o.final)} `;
+      box.innerHTML = `<span class="ok">Done.</span> ${o.frames} frames processed. Result: ${esc(o.final)} (also PNG, JPG and FITS)${o.hoo ? `; HOO version: ${esc(o.hoo)}` : ""} `;
       const m = document.createElement("button"); m.textContent = "Measure the result";
       m.onclick = () => { if ($("lastDlg").open) $("lastDlg").close(); document.querySelector('.tab[data-tab="work"]').click(); analyze(o.final); };
       box.appendChild(m);
@@ -802,7 +803,7 @@ async function watchAuto(job_id, px = "auto") {
   }
 }
 $("autoRun").onclick = async () => {
-  if (!confirm("Auto-apply the plan? This copies the session's raw frames to the processing folder and restacks them; it can take an hour or more for hundreds of frames.")) return;
+  if (!confirm("Auto-apply the plan? This copies the session's raw frames to the processing folder and runs the whole pipeline: stack, plate solve, colour calibration, deconvolution, noise reduction, stretch and star reduction. It can take an hour or more for hundreds of frames.")) return;
   $("autoRun").disabled = true;
   try {
     const { job_id } = await api("/api/autoprocess/start", { assessment_id: assessmentId, include_failed: $("autoFailed").checked });

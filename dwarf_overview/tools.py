@@ -77,6 +77,8 @@ PROGRAMS = {
     "pipp": {"label": "PIPP", "globs": ["PIPP*/pipp*.exe", "PIPP*/*/pipp*.exe"]},
     "autostakkert": {"label": "AutoStakkert", "globs": ["AutoStakkert*/AutoStakkert*.exe", "AS*/AutoStakkert*.exe"]},
     "registax": {"label": "RegiStax", "globs": ["RegiStax*/RegiStax*.exe"]},
+    "starnet": {"label": "starnet++", "globs": ["StarNet*/starnet++.exe", "StarNet*/*/starnet++.exe", "starnet*/starnet++.exe",
+                                                 "StarNet*/starnet2.exe", "StarNet*/*/starnet2.exe"]},
     "imppg": {"label": "ImPPG", "globs": ["ImPPG*/bin/imppg*.exe", "ImPPG*/imppg*.exe", "ImPPG*/bin/impp*.exe"]},
 }
 

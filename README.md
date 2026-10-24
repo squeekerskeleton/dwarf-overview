@@ -130,12 +130,17 @@ If the DWARF isn't on your Wi-Fi, there are backup ways to reach it:
 
 After **Assess**, the Processing plan has an **Auto-apply plan** button. It shows how many raw frames the session has (for example "915 frames found") and where they are: the laptop library, the processing folder, or the DWARF itself over USB-C or Wi-Fi. Frames the DWARF rejected are left out unless you tick **Include frames the DWARF rejected**. Then it:
 
-1. copies the missing frames into the **processing folder** (Settings), after checking there's room. Hundreds of frames need tens of GB, so pick a big drive, ideally an SSD;
-2. restacks them in Siril: debayer, 2-pass registration, keeps the best frames by FWHM and roundness as the plan says, Winsorized rejection, 32-bit FITS;
+1. copies the missing frames into the **processing folder** (Settings), after checking there's room. Hundreds of frames need tens of GB, so pick a big drive, ideally an SSD. It also looks for the DWARF's own master dark for that exposure and gain (Astronomy/CALI_FRAME on the DWARF, over USB-C or Wi-Fi) and uses it only if its hot pixels line up with your frames;
+2. stacks them in Siril: dark subtraction and cosmetic correction (when a dark fits), debayer, 2-pass registration, keeps the best frames by FWHM and roundness, Winsorized rejection, frames weighted by sharpness (Siril 1.4), 32-bit;
 3. crops the stacking edges;
-4. runs GraXpert background extraction (and AI denoise if the plan asks for it);
-5. plate solves and colour calibrates in Siril (this needs internet for the star catalogue, so it's skipped with a note at a dark site);
-6. removes green only if the plan says to, runs the plan's other Siril commands, and saves `result_final` as FITS, TIFF and JPG.
+4. GraXpert background extraction, on the graphics card when there is one;
+5. plate solves (Siril, which works offline with its local star catalogues in 1.4; ASTAP if Siril can't) and calibrates the colour with SPCC, in narrowband mode for the Duo-Band filter. If that can't run, PCC, and if that can't either, the colour is balanced from the image's own stars;
+6. deconvolution to sharpen fine detail: GraXpert's AI if its model is installed, otherwise Siril's Richardson-Lucy with a PSF measured from the stars;
+7. noise reduction: GraXpert's AI denoise (Siril's NL-Bayes if GraXpert isn't there), stronger for short sessions and gentler for long ones;
+8. Siril: the plan's own commands, then a linked auto-stretch and a little saturation;
+9. star reduction: with **StarNet++** if it's installed (Setup links it; it separates the stars so they can be dimmed cleanly), otherwise a star mask and erosion. Clusters keep their stars, galaxies get a light touch and nebulae a stronger one. Saves `result_final` as 16-bit TIFF, PNG, JPG and FITS, plus `result_hoo` (Hα red, OIII teal) for Duo-Band sessions.
+
+Anything the plan doesn't set is chosen from the data: how many frames, the total integration time, the filter, and what kind of object it is. Each step's note says what it did and why, and if a program can't do a step, the next option is used instead of stopping the run.
 
 A progress bar shows how far the whole run is and roughly how long is left. **PAUSE ALL** at the top suspends whatever program the app is running (Siril, GraXpert) and holds frame copying; press **RESUME ALL** to carry on exactly where it was.
 

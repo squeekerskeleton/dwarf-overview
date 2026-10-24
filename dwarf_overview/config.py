@@ -37,6 +37,7 @@ DEFAULTS = {
     "update_url": "",
     "dwarfium_web_url": "",
     "astap_path": "",
+    "starnet_path": "",
     "dwarfium_standalone_dir": "",
 }
 
