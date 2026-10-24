@@ -1,6 +1,6 @@
 {
-  "version": "0.8.2",
-  "notes": "Frames the DWARF rejected now rank far below the passed ones: only the few sharper and with more stars than a typical passed frame join the stack, at most a tenth of it.",
-  "sha256": "943bb81aefd91b826dafb98119ccfeb0297dd784bb037c6465fe7bbe05114340",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.8.2.zip"
+  "version": "0.8.3",
+  "notes": "'Consider frames the DWARF rejected' now starts unticked; rejected frames are only checked when you tick it.",
+  "sha256": "48d4c85e39d6b65871132155faee15262b0d847bfb1f40e597f1302ea9b8bbf1",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.8.3.zip"
 }
