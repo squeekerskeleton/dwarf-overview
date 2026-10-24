@@ -1,6 +1,6 @@
 {
-  "version": "0.8.1",
-  "notes": "Auto-apply keeps the original 3840x2160 frame size: no more cropping to the strip all frames share after hours of sky rotation, and about 75% of frames are kept instead of 40%. Untick 'Keep the original frame size' for the old cropped result.",
-  "sha256": "9ee950afd538187dbc33e18cce7bee3d9372c5c78d5ca1fba49d846438d0b99a",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.8.1.zip"
+  "version": "0.8.2",
+  "notes": "Frames the DWARF rejected now rank far below the passed ones: only the few sharper and with more stars than a typical passed frame join the stack, at most a tenth of it.",
+  "sha256": "943bb81aefd91b826dafb98119ccfeb0297dd784bb037c6465fe7bbe05114340",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.8.2.zip"
 }

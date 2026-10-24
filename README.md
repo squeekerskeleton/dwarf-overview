@@ -128,7 +128,7 @@ If the DWARF isn't on your Wi-Fi, there are backup ways to reach it:
 
 ## Auto-apply a processing plan
 
-After **Assess**, the Processing plan has an **Auto-apply plan** button. It shows how many raw frames the session has (for example "915 frames found") and where they are: the laptop library, the processing folder, or the DWARF itself over USB-C or Wi-Fi. Frames the DWARF rejected are left out unless you tick **Include frames the DWARF rejected**. Then it:
+After **Assess**, the Processing plan has an **Auto-apply plan** button. It shows how many raw frames the session has (for example "915 frames found") and where they are: the laptop library, the processing folder, or the DWARF itself over USB-C or Wi-Fi. Frames the DWARF rejected (`failed_*`) rank far below the ones it passed: with **Consider frames the DWARF rejected** ticked (the default), each one is measured (star count, sharpness, roundness) against a sample of the passed frames, and only those sharper and with more stars than the median passed frame get in, at most a tenth of the stack. The rest wait in `failed_frames` next to `lights`. Untick it to leave them all out. Then it:
 
 1. copies the missing frames into the **processing folder** (Settings), after checking there's room. Hundreds of frames need tens of GB, so pick a big drive, ideally an SSD. It also looks for the DWARF's own master dark for that exposure and gain (Astronomy/CALI_FRAME on the DWARF, over USB-C or Wi-Fi) and uses it only if its hot pixels line up with your frames;
 2. stacks them in Siril: dark subtraction and cosmetic correction (when a dark fits), debayer, 2-pass registration, keeps the sharpest frames (about 75% for a big session), Winsorized rejection, frames weighted by sharpness (Siril 1.4), 32-bit;

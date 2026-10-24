@@ -40,6 +40,7 @@ from . import config, dwarf, finishing, history, hwprofile, scope, tools
 
 FRAME = re.compile(r"\.(fits?|fts)$", re.I)
 NOT_A_FRAME = re.compile(r"^(stacked|thumbnail|result_|overview_)|_(gx|siril|crop|bg|dn)", re.I)
+FAILED_DIR = "failed_frames"
 # Debayered 16-bit RGB is three times a raw frame; Siril keeps the converted and the registered copies.
 SPACE_FACTOR = 7.0
 
@@ -85,7 +86,8 @@ def find_frames(preview_path: str, include_failed: bool = False) -> dict:
         if _is_frame(fname, include_failed) and fname not in frames:
             frames[fname] = {"name": fname, "source": source, "where": where, "size": size}
 
-    for folder, source in ((lights, "processing folder"), (local, "laptop library")):
+    held = lights.parent / FAILED_DIR  # rejected frames kept out of the stack by the last screening
+    for folder, source in ((lights, "processing folder"), (held, "processing folder"), (local, "laptop library")):
         if folder.is_dir():
             for f in folder.iterdir():
                 if f.is_file():
@@ -474,8 +476,10 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
     j.step(0, "running", f"{found['count']} frames for {found['session']}" +
            (f" ({found['failed']} the DWARF rejected are included)" if found["failed"] else "") + ".")
     copied = _copy_frames(j, found, lights)
+    failed_note = _screen_failed(j, work, lights, j.meta.get("include_failed"))
     dark_note = _master_dark(j, found, shot, work, lights)
-    j.step(0, "done", f"{found['count']} frames ready in {lights} ({copied} copied). {dark_note}")
+    ready = sum(1 for f in lights.iterdir() if f.is_file() and FRAME.search(f.name))
+    j.step(0, "done", f"{ready} frames ready to stack in {lights} ({copied} copied). {failed_note} {dark_note}".replace("  ", " "))
 
     # 2. restack
     stacked = work / "result_stack.fits"
@@ -520,6 +524,26 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
     stretched = carry(7, "stretched", current, lambda c: _stretch(j, a, plan, c, work, tune, rec, calibrated))
     # 9. star reduction and saving
     return _finish(j, stretched, work, proc, found, rec)
+
+
+def _screen_failed(j: _Job, work: Path, lights: Path, include: bool) -> str:
+    """The DWARF's rejected frames (failed_*) rank far below the ones it passed: they wait in failed_frames/
+    and only the few that beat the passed frames' median quality join the stack (framescore.py)."""
+    from . import framescore
+    held = work / FAILED_DIR
+    for f in list(lights.glob("*")) if lights.is_dir() else []:
+        if f.is_file() and f.name.lower().startswith("failed") and FRAME.search(f.name):
+            held.mkdir(exist_ok=True)
+            f.replace(held / f.name)
+    failed = sorted(f for f in held.glob("*") if FRAME.search(f.name)) if held.is_dir() else []
+    if not include or not failed:
+        return ""
+    j.log(f"Checking the {len(failed)} frames the DWARF rejected against a sample of the passed ones…")
+    passed = [f for f in lights.iterdir() if f.is_file() and FRAME.search(f.name)]
+    accepted, note = framescore.screen_failed(passed, failed)
+    for f in accepted:
+        f.replace(lights / f.name)
+    return note
 
 
 def _master_dark(j: _Job, found: dict, shot: dict, work: Path, lights: Path) -> str:
