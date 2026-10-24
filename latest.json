@@ -1,6 +1,6 @@
 {
-  "version": "0.8.0",
-  "notes": "Auto-apply now runs the whole pipeline: the DWARF's master dark, stack, crop, GraXpert background extraction, offline plate solve (Siril, then ASTAP) and SPCC colour (narrowband for Duo-Band), deconvolution, AI noise reduction, stretch, star reduction (StarNet if installed), and an HOO version for Duo-Band. Settings come from your data.",
-  "sha256": "6f7700a18d4d3eaf60a5be08cca910361bad9c6197b1517045c0daccf4d6fef2",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.8.0.zip"
+  "version": "0.8.1",
+  "notes": "Auto-apply keeps the original 3840x2160 frame size: no more cropping to the strip all frames share after hours of sky rotation, and about 75% of frames are kept instead of 40%. Untick 'Keep the original frame size' for the old cropped result.",
+  "sha256": "9ee950afd538187dbc33e18cce7bee3d9372c5c78d5ca1fba49d846438d0b99a",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.8.1.zip"
 }

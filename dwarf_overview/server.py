@@ -400,7 +400,8 @@ class Handler(BaseHTTPRequestHandler):
                 found["sources"] = sorted({f["source"] for f in found.pop("frames")})
                 return self._json(found)
             if path == "/api/autoprocess/start":
-                return self._json({"job_id": autoprocess.start(int(body["assessment_id"]), bool(body.get("include_failed")))})
+                return self._json({"job_id": autoprocess.start(int(body["assessment_id"]), bool(body.get("include_failed")),
+                                                               full_frame=body.get("full_frame", True) is not False)})
             if path == "/api/autoprocess/resume":
                 return self._json({"job_id": autoprocess.resume(str(body["folder"]))})
             if path == "/api/autoprocess/cleanup":

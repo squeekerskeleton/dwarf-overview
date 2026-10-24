@@ -194,7 +194,8 @@
       <div class="card"><h2>Processing plan</h2>
         <div id="autoBox" style="margin-bottom:10px;padding:10px;border:1px solid var(--accent);border-radius:8px">
           <div class="row"><button class="primary" id="autoRun">Auto-apply plan</button>
-            <label style="display:inline-flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="autoFailed" style="width:auto"> Include frames the DWARF rejected</label></div>
+            <label style="display:inline-flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="autoFailed" style="width:auto"> Include frames the DWARF rejected</label>
+            <label style="display:inline-flex;gap:6px;align-items:center;margin:0" title="On: the result is the same size as the DWARF's frames. Off: cropped to the area every frame shares, which can be much smaller after hours of sky rotation."><input type="checkbox" id="autoFull" checked style="width:auto"> Keep the original frame size</label></div>
           <div id="autoFrames" class="caption">Runs the whole pipeline on every raw frame of this session: the DWARF's dark, stack, crop, background extraction, plate solve and colour calibration, deconvolution, noise reduction, stretch and star reduction, with settings chosen from your data. Your originals are never changed.</div>
           <div id="autoProg" class="hidden" style="margin-top:8px"><div class="row" style="justify-content:space-between"><b id="autoPct">0%</b><span class="caption" id="autoEta"></span></div>
             <div class="hwbar" style="height:12px"><span id="autoBar" style="width:0%"></span></div></div>
@@ -806,7 +807,7 @@ $("autoRun").onclick = async () => {
   if (!confirm("Auto-apply the plan? This copies the session's raw frames to the processing folder and runs the whole pipeline: stack, plate solve, colour calibration, deconvolution, noise reduction, stretch and star reduction. It can take an hour or more for hundreds of frames.")) return;
   $("autoRun").disabled = true;
   try {
-    const { job_id } = await api("/api/autoprocess/start", { assessment_id: assessmentId, include_failed: $("autoFailed").checked });
+    const { job_id } = await api("/api/autoprocess/start", { assessment_id: assessmentId, include_failed: $("autoFailed").checked, full_frame: $("autoFull").checked });
     await watchAuto(job_id, "auto");
   } catch (e) { $("autoFrames").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
   $("autoRun").disabled = false;

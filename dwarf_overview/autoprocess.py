@@ -277,16 +277,17 @@ class _Job:
 WEIGHTS = [20, 50, 1, 6, 5, 5, 6, 4, 3]
 STEPS = ["Find and copy the raw frames and the DWARF's matching dark",
          "Siril: calibrate, debayer, register, select frames, stack",
-         "Crop the stacking edges", "GraXpert: background extraction",
+         "Stacking edges (full frame, or cropped)", "GraXpert: background extraction",
          "Plate solve and colour calibration", "Deconvolution (sharpen fine detail)", "Noise reduction",
          "Siril: stretch, saturation and the plan's own steps", "Star reduction and final save"]
 # Steps of runs saved by older versions, so LAST SESSION still recognises them.
-OLD_LABELS = {"Find and copy the raw frames": 0, "Siril: debayer, register, select frames, stack": 1}
+OLD_LABELS = {"Find and copy the raw frames": 0, "Siril: debayer, register, select frames, stack": 1,
+              "Crop the stacking edges": 2}
 DUO_BAND = {"rwl": 656.28, "gwl": 500.7, "bwl": 500.7, "bw": 15}
 DWARF3_SENSOR = "Sony IMX678"
 
 
-def start(assessment_id: int, include_failed: bool = False, resume: dict | None = None) -> str:
+def start(assessment_id: int, include_failed: bool = False, resume: dict | None = None, full_frame: bool = True) -> str:
     a = history.get_assessment(int(assessment_id))
     if not a:
         raise ProcessError("Assess the photo first, so there's a plan to apply.")
@@ -301,7 +302,8 @@ def start(assessment_id: int, include_failed: bool = False, resume: dict | None 
         raise ProcessError(f"Not enough room: this needs about {found['bytes_needed'] / 1e9:.0f} GB and "
                            f"{found['work_folder'][:3]} has {found['bytes_free'] / 1e9:.0f} GB free. Pick a bigger "
                            "drive for the processing folder in Settings.")
-    meta = {"assessment_id": int(assessment_id), "include_failed": include_failed, "session": found["session"],
+    meta = {"assessment_id": int(assessment_id), "include_failed": include_failed, "full_frame": full_frame,
+            "session": found["session"],
             "photo": a["file_path"], "frames": found["count"],
             "started": (resume or {}).get("started") or time.strftime("%Y-%m-%d %H:%M:%S")}
     j = _Job(STEPS, Path(found["work_folder"]), meta)
@@ -457,6 +459,7 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
     except (OSError, ValueError):
         shot = {}
     rec = _recommend(plan, a, found, shot)
+    full = j.meta.get("full_frame", True)
     plan.update({k: v for k, v in rec.items() if k == "keep_percent"})
     v14 = _siril_version() >= (1, 4)
 
@@ -477,7 +480,7 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
     # 2. restack
     stacked = work / "result_stack.fits"
     if not reuse(1, "stacked"):
-        _restack(j, plan, work, proc, tune, (work / "master_dark.fits").exists(), v14)
+        _restack(j, plan, work, proc, tune, (work / "master_dark.fits").exists(), v14, full)
         j.outputs["stacked"] = str(stacked)
         j.step(1, "done", f"Stacked: {stacked}")
 
@@ -485,9 +488,13 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
     cropped = work / "result_crop.fits"
     if not reuse(2, "cropped"):
         j.step(2, "running")
-        _crop(stacked, cropped, plan["crop_px"])
-        j.outputs["cropped"] = str(cropped)
-        j.step(2, "done", f"Cropped {plan['crop_px']} px off each edge.")
+        if full:
+            j.outputs["cropped"] = str(cropped)
+            j.step(2, "done", _fill_empty(stacked, cropped))
+        else:
+            _crop(stacked, cropped, plan["crop_px"])
+            j.outputs["cropped"] = str(cropped)
+            j.step(2, "done", f"Cropped {plan['crop_px']} px off each edge.")
 
     gx = a["assessment"].get("graxpert") or {}
     exe = tools.find_graxpert()
@@ -538,9 +545,13 @@ def _master_dark(j: _Job, found: dict, shot: dict, work: Path, lights: Path) -> 
         return f"Found the DWARF's dark {c['name']} but didn't use it: {e}."
 
 
-def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str], dark: bool, v14: bool) -> None:
-    j.step(1, "running", f"{'Dark-subtracting with cosmetic correction, then k' if dark else 'K'}eeping the best "
-                         f"{plan['keep_percent']}% by FWHM with roundness above {plan['roundness']}; "
+def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str], dark: bool, v14: bool,
+             full: bool = True) -> None:
+    # The DWARF is on an alt-az mount, so the sky turns in the frame during a session: the area every frame
+    # shares can shrink to a strip over a few hours. Full-frame mode keeps the reference frame's whole field.
+    framing = "current" if full else "min"
+    j.step(1, "running", f"{'Dark-subtracting with cosmetic correction, then k' if dark else 'K'}eeping the sharpest "
+                         f"{plan['keep_percent']}% of frames; {'full original frame size' if full else 'cropped to the area all frames share'}; "
                          f"Winsorized rejection {plan['sigma_low']}/{plan['sigma_high']}"
                          f"{', frames weighted by their sharpness' if v14 else ''}.")
     for use_dark in ([True, False] if dark else [False]):
@@ -555,7 +566,7 @@ def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str], dark:
             "# Written by DWARF Post-Processing Hub: restack with frame selection",
             "requires 1.2.0", *tune, "setext fits", "set16bits", "cd lights", *prep,
             f"register {seq} -2pass",
-            f"seqapplyreg {seq} -filter-wfwhm={plan['keep_percent']}% -filter-round={plan['roundness']} -framing=min",
+            f"seqapplyreg {seq} -filter-wfwhm={plan['keep_percent']}% -framing={framing}",
             "set32bits",
             f"stack r_{seq} rej w {plan['sigma_low']} {plan['sigma_high']} -norm=addscale -output_norm"
             f"{' -weight=wfwhm' if v14 else ''} -32b -out=../result_stack",
@@ -814,6 +825,28 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
     return out
 
 
+def _fill_empty(src: Path, dst: Path) -> str:
+    """Full-frame stacks: corners the turning field never covered come out as zeros. Fill them with the
+    background level so background extraction and the stretch aren't thrown by black wedges."""
+    import numpy as np
+    from astropy.io import fits
+    with fits.open(src) as hdul:
+        data, header = np.asarray(hdul[0].data, dtype="float32"), hdul[0].header.copy()
+    empty = np.all(data == 0, axis=0) if data.ndim == 3 else data == 0
+    share = float(empty.mean())
+    if share:
+        planes = data if data.ndim == 3 else data[None]
+        for c in planes:
+            c[empty] = np.median(c[~empty]) if (~empty).any() else 0
+    for k in ("BZERO", "BSCALE"):
+        header.remove(k, ignore_missing=True)
+    fits.PrimaryHDU(data=data, header=header).writeto(dst, overwrite=True)
+    h, w = data.shape[-2:]
+    return (f"Kept the full {w}×{h} frame, no crop" +
+            (f"; {share * 100:.1f}% of it (corners the turning sky never covered) was filled with the background level."
+             if share > 0.0005 else "."))
+
+
 def _crop(src: Path, dst: Path, margin: int) -> None:
     from astropy.io import fits
     with fits.open(src) as hdul:
@@ -885,4 +918,4 @@ def resume(folder: str) -> str:
     live = tools.JOBS.get(r.get("job_id") or "")
     if live and live["state"] == "running":
         return r["job_id"]
-    return start(int(r["assessment_id"]), bool(r.get("include_failed")), resume=r)
+    return start(int(r["assessment_id"]), bool(r.get("include_failed")), resume=r, full_frame=r.get("full_frame", True))
