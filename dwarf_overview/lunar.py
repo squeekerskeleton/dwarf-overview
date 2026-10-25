@@ -62,7 +62,15 @@ def sharpness(lum: np.ndarray, mask: np.ndarray | None = None) -> float:
 def looks_like_moon(lum: np.ndarray) -> bool:
     thr = _otsu(lum)
     frac = float(np.mean(lum > thr))
-    return thr > 0.08 and frac > 0.04 and float(np.median(lum)) < thr
+    if not (thr > 0.08 and frac > 0.04 and float(np.median(lum)) < thr):
+        return False
+    # The Moon is one solid bright disc: most bright pixels sit in a single blob. A bright nebula or a
+    # washed-out deep-sky image is patchy, so it fails this.
+    import cv2
+    n, _, stats, _ = cv2.connectedComponentsWithStats((lum > thr).astype("uint8"), connectivity=8)
+    if n < 2:
+        return False
+    return float(stats[1:, cv2.CC_STAT_AREA].max()) / float(stats[1:, cv2.CC_STAT_AREA].sum()) > 0.8
 
 
 def _detail_center(lum: np.ndarray, inner: np.ndarray, factor: int) -> tuple[float, float]:

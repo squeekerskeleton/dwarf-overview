@@ -195,7 +195,8 @@
         <div id="autoBox" style="margin-bottom:10px;padding:10px;border:1px solid var(--accent);border-radius:8px">
           <div class="row"><button class="primary" id="autoRun">Auto-apply plan</button>
             <label style="display:inline-flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="autoFailed" style="width:auto" title="Rejected frames rank far below the passed ones: only the few sharper, rounder and with more stars than a typical passed frame get in, at most a tenth of the stack."> Consider frames the DWARF rejected (only the best few get in)</label>
-            <label style="display:inline-flex;gap:6px;align-items:center;margin:0" title="On: the result is the same size as the DWARF's frames. Off: cropped to the area every frame shares, which can be much smaller after hours of sky rotation."><input type="checkbox" id="autoFull" checked style="width:auto"> Keep the original frame size</label></div>
+            <label style="display:inline-flex;gap:6px;align-items:center;margin:0" title="On: the result is the same size as the DWARF's frames. Off: cropped to the area every frame shares, which can be much smaller after hours of sky rotation."><input type="checkbox" id="autoFull" checked style="width:auto"> Keep the original frame size</label>
+            <label id="autoReuseL" class="hidden" style="display:inline-flex;gap:6px;align-items:center;margin:0" title="Skips copying and stacking and redoes everything after it, in a few minutes."><input type="checkbox" id="autoReuse" style="width:auto"> Reuse the last stack (redo only the finishing)</label></div>
           <div id="autoFrames" class="caption">Runs the whole pipeline on every raw frame of this session: the DWARF's dark, stack, crop, background extraction, plate solve and colour calibration, deconvolution, noise reduction, stretch and star reduction, with settings chosen from your data. Your originals are never changed.</div>
           <div id="autoProg" class="hidden" style="margin-top:8px"><div class="row" style="justify-content:space-between"><b id="autoPct">0%</b><span class="caption" id="autoEta"></span></div>
             <div class="hwbar" style="height:12px"><span id="autoBar" style="width:0%"></span></div></div>
@@ -761,7 +762,8 @@ async function autoFrames() {
       (f.bytes_to_copy ? `${gb(f.bytes_to_copy)} to copy. ` : "") + `Needs about ${gb(f.bytes_needed)}; ${gb(f.bytes_free)} free in ${esc(f.work_folder)}.` +
       (f.fits ? "" : ` <span class="error">Not enough room: choose a bigger drive for the processing folder in Settings.</span>`) +
       (!f.dwarf_reached && f.count < 3 ? ` <span class="warn">The DWARF isn't reachable, so its frames can't be listed. Switch it on (or plug in USB-C).</span>` : "");
-    $("autoRun").disabled = !f.fits || f.count < 3;
+    $("autoReuseL").classList.toggle("hidden", !f.has_stack); $("autoReuse").checked = !!f.has_stack;
+    $("autoRun").disabled = !(f.fits || f.has_stack) || f.count < 3;
   } catch (e) { $("autoFrames").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
 }
 $("autoFailed").onchange = autoFrames;
@@ -789,9 +791,9 @@ async function watchAuto(job_id, px = "auto") {
     const box = $(px + "Frames");
     if (j.state === "done") {
       const o = j.output; latestOutput = o.final;
-      box.innerHTML = `<span class="ok">Done.</span> ${o.frames} frames processed. Result: ${esc(o.final)} (also PNG, JPG and FITS)${o.hoo ? `; HOO version: ${esc(o.hoo)}` : ""} `;
+      box.innerHTML = `<span class="ok">Done.</span> ${o.frames} frames processed. Result: ${esc(o.final)} (also PNG, JPG and FITS)${o.natural ? `; natural-colour version: ${esc(o.natural)}` : ""} `;
       const m = document.createElement("button"); m.textContent = "Measure the result";
-      m.onclick = () => { if ($("lastDlg").open) $("lastDlg").close(); document.querySelector('.tab[data-tab="work"]').click(); analyze(o.final); };
+      m.onclick = () => { if ($("lastDlg").open) $("lastDlg").close(); document.querySelector('.tab[data-tab="work"]').click(); analyze(o.final, "deepsky"); };
       box.appendChild(m);
       if (o.cleanup_bytes) {
         const c = document.createElement("button"); c.textContent = `Delete Siril's working files (${gb(o.cleanup_bytes)})`; c.style.marginLeft = "6px";
@@ -807,7 +809,8 @@ $("autoRun").onclick = async () => {
   if (!confirm("Auto-apply the plan? This copies the session's raw frames to the processing folder and runs the whole pipeline: stack, plate solve, colour calibration, deconvolution, noise reduction, stretch and star reduction. It can take an hour or more for hundreds of frames.")) return;
   $("autoRun").disabled = true;
   try {
-    const { job_id } = await api("/api/autoprocess/start", { assessment_id: assessmentId, include_failed: $("autoFailed").checked, full_frame: $("autoFull").checked });
+    const { job_id } = await api("/api/autoprocess/start", { assessment_id: assessmentId, include_failed: $("autoFailed").checked, full_frame: $("autoFull").checked,
+      reuse_stack: !$("autoReuseL").classList.contains("hidden") && $("autoReuse").checked });
     await watchAuto(job_id, "auto");
   } catch (e) { $("autoFrames").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
   $("autoRun").disabled = false;
@@ -917,13 +920,16 @@ $("cmpRun").onclick = async () => {
 // ---------------- feedback
 function drawRating() {
   $("rating").innerHTML = [1, 2, 3, 4, 5].map((n) => `<button class="${rating >= n ? "on" : ""}" data-r="${n}">${n}</button>`).join("");
-  $("rating").querySelectorAll("button").forEach((b) => b.onclick = () => { rating = +b.dataset.r; drawRating(); });
+  $("rating").querySelectorAll("button").forEach((b) => b.onclick = () => { rating = +b.dataset.r; drawRating(); saveFeedback(true); });
 }
-$("fbSave").onclick = async () => {
+// A rating is saved as soon as it's picked; notes and settings are saved with the button.
+async function saveFeedback(auto) {
+  if (!assessmentId) return;
   try { await api("/api/feedback", { assessment_id: assessmentId, rating, settings_used: $("used").value, notes: $("fbNotes").value });
-    $("fbStatus").innerHTML = '<span class="ok">Saved. Future suggestions will take this into account.</span>'; }
+    $("fbStatus").innerHTML = `<span class="ok">${auto ? `Rating ${rating}/5 saved.` : "Saved."} Future suggestions will take this into account.</span>`; }
   catch (e) { $("fbStatus").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
-};
+}
+$("fbSave").onclick = () => saveFeedback(false);
 
 // ---------------- history
 async function loadHistory() {

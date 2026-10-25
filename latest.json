@@ -1,6 +1,6 @@
 {
-  "version": "0.8.3",
-  "notes": "'Consider frames the DWARF rejected' now starts unticked; rejected frames are only checked when you tick it.",
-  "sha256": "48d4c85e39d6b65871132155faee15262b0d847bfb1f40e597f1302ea9b8bbf1",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.8.3.zip"
+  "version": "0.9.0",
+  "notes": "Much better Auto-apply finishing: neutral background after colour calibration, firmer AI denoise plus a colour-noise pass (fixes red mottling on Duo-Band), darker unlinked stretch for contrast, no more star erosion or Richardson-Lucy, a quality check before saving, HOO as the main Duo-Band result, middle-frame reference and a roundness filter when stacking. New: reuse the last stack to redo only the finishing. Ratings save as soon as you pick them, and results are no longer assessed as the Moon.",
+  "sha256": "9d25eb2d37e4762f9e4fae5cf961f05cdbb0ed04b3513c9246ea4ac35d4e6053",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.9.0.zip"
 }

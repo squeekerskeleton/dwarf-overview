@@ -438,6 +438,8 @@ def analyze(path: str | Path, mode: str = "auto") -> dict:
         return {"path": str(path), "shot_info": find_shot_info(path), "mode": "moon", "kind": "video",
                 **lunar.analyze_video(path)}
     img = load_image(path)
+    if mode == "auto" and path.stem.lower().startswith(("result_", "stacked")) and "moon" not in path.stem.lower():
+        mode = "deepsky"  # Auto-apply results and the DWARF's astro stacks are deep-sky images
     if mode == "auto":
         small, _ = _downsample(img.data, 512)
         mode = "moon" if lunar.looks_like_moon(small.mean(axis=2)) else "deepsky"

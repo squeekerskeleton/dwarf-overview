@@ -118,6 +118,7 @@ def find_frames(preview_path: str, include_failed: bool = False) -> dict:
     free = shutil.disk_usage(_existing_parent(work_root())).free
     need = to_copy + total * SPACE_FACTOR
     return {"session": name, "frames": shown, "count": len(shown), "failed": failed, "dwarf_reached": remote,
+            "has_stack": (work_root() / _safe(name) / "result_stack.fits").exists(),
             "bytes": total, "bytes_to_copy": to_copy, "bytes_needed": int(need), "bytes_free": free,
             "fits": free > need, "work_folder": str(work_root() / _safe(name))}
 
@@ -289,11 +290,24 @@ DUO_BAND = {"rwl": 656.28, "gwl": 500.7, "bwl": 500.7, "bw": 15}
 DWARF3_SENSOR = "Sony IMX678"
 
 
-def start(assessment_id: int, include_failed: bool = False, resume: dict | None = None, full_frame: bool = True) -> str:
+def start(assessment_id: int, include_failed: bool = False, resume: dict | None = None, full_frame: bool = True,
+          reuse_stack: bool = False) -> str:
     a = history.get_assessment(int(assessment_id))
     if not a:
         raise ProcessError("Assess the photo first, so there's a plan to apply.")
     found = find_frames(a["file_path"], include_failed)
+    if reuse_stack and not resume:
+        # Redo only the finishing: carry the last run's stack over as if resuming after the stacking step.
+        stack = Path(found["work_folder"]) / "result_stack.fits"
+        if not stack.exists():
+            raise ProcessError("There's no earlier stack for this session to reuse; untick that option.")
+        try:
+            prev = json.loads((Path(found["work_folder"]) / RUN_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            prev = {}
+        resume = {"steps": [{"label": STEPS[1], "state": "done", "note": "Reused the last stack"}],
+                  "outputs": {"stacked": str(stack)}, "started": None,
+                  "full_frame": prev.get("full_frame", full_frame)}
     if resume:  # the earlier run's working files will be reused or replaced, so count their space as free
         found["bytes_free"] += _folder_bytes(Path(found["work_folder"]) / "process")
         found["fits"] = found["bytes_free"] > found["bytes_needed"] or bool(resume.get("outputs", {}).get("stacked"))
@@ -420,15 +434,15 @@ def _recommend(plan: dict, a: dict, found: dict, shot: dict) -> dict:
         r["keep_percent"] = 90 if found["count"] < 50 else 80 if found["count"] < 300 else 75
     if gx.get("run_denoise") and gx.get("denoise_strength") is not None:
         r["denoise"] = float(gx["denoise_strength"])
-    else:  # less integration = more noise = stronger denoise
-        r["denoise"] = 0.6 if minutes < 20 else 0.5 if minutes < 60 else 0.4 if minutes < 180 else 0.3
+    else:  # less integration = more noise = stronger denoise; DWARF data needs a firm hand even on long sessions
+        r["denoise"] = 0.75 if minutes < 60 else 0.7 if minutes < 180 else 0.65
     if "cluster" in kind:
         r["stars"] = 0.0  # the stars are the subject
     elif "galaxy" in kind:
         r["stars"] = 0.4
     else:
         r["stars"] = 0.7  # nebulae: let the gas show through the star field
-    r["deconv"] = 0.5 if minutes >= 30 else 0.3  # gentle on noisy data
+    r["deconv"] = 0.3  # gentle: the DWARF's 2.75"/px is undersampled, so there's little to gain and noise to lose
     return r
 
 
@@ -575,7 +589,7 @@ def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str], dark:
     # shares can shrink to a strip over a few hours. Full-frame mode keeps the reference frame's whole field.
     framing = "current" if full else "min"
     j.step(1, "running", f"{'Dark-subtracting with cosmetic correction, then k' if dark else 'K'}eeping the sharpest "
-                         f"{plan['keep_percent']}% of frames; {'full original frame size' if full else 'cropped to the area all frames share'}; "
+                         f"{plan['keep_percent']}% of frames that are also among the roundest 80%; middle frame as reference; {'full original frame size' if full else 'cropped to the area all frames share'}; "
                          f"Winsorized rejection {plan['sigma_low']}/{plan['sigma_high']}"
                          f"{', frames weighted by their sharpness' if v14 else ''}.")
     for use_dark in ([True, False] if dark else [False]):
@@ -585,12 +599,15 @@ def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str], dark:
         prep = (["convert light -out=../process", "cd ../process",
                  "calibrate light -dark=../master_dark.fits -cc=dark -cfa -debayer"] if use_dark else
                 ["convert light -debayer -out=../process", "cd ../process"])
+        n = sum(1 for f in (work / "lights").iterdir() if FRAME.search(f.name))
         script = work / "overview_stack.ssf"
         script.write_text("\n".join([
             "# Written by DWARF Post-Processing Hub: restack with frame selection",
             "requires 1.2.0", *tune, "setext fits", "set16bits", "cd lights", *prep,
+            # The middle frame as reference spreads the field rotation evenly both ways.
+            f"setref {seq} {max(1, (n + 1) // 2)}",
             f"register {seq} -2pass",
-            f"seqapplyreg {seq} -filter-wfwhm={plan['keep_percent']}% -framing={framing}",
+            f"seqapplyreg {seq} -filter-wfwhm={plan['keep_percent']}% -filter-round=80% -framing={framing}",
             "set32bits",
             f"stack r_{seq} rej w {plan['sigma_low']} {plan['sigma_high']} -norm=addscale -output_norm"
             f"{' -weight=wfwhm' if v14 else ''} -32b -out=../result_stack",
@@ -705,8 +722,9 @@ def _calibrate(j: _Job, plan: dict, shot: dict, current: Path, work: Path, tune:
     for cmd, label in tries:
         ok, tail = _siril_try(j, work, tune, ['load "result_solved"', cmd], "result_calibrated", "colour")
         if ok:
+            neutral = finishing.neutralise(work / "result_calibrated.fits", work / "result_calibrated.fits")
             j.outputs["calibrated"] = str(work / "result_calibrated.fits")
-            j.step(4, "done", f"Plate solved with {how}; colour by {label}.")
+            j.step(4, "done", f"Plate solved with {how}; colour by {label}; {neutral}.")
             return work / "result_calibrated.fits"
     note = finishing.colour_balance(solved, work / "result_calibrated.fits")
     j.outputs["calibrated"] = str(work / "result_calibrated.fits")
@@ -716,43 +734,43 @@ def _calibrate(j: _Job, plan: dict, shot: dict, current: Path, work: Path, tune:
 
 
 def _deconvolve(j: _Job, exe: str | None, current: Path, work: Path, tune: list[str], t: dict, rec: dict) -> Path:
+    """Only GraXpert's AI stellar deconvolution, and only when its model is there. Siril's Richardson-Lucy was
+    tried in 0.8.0: on the DWARF's undersampled data it barely tightened stars (2.53 to 2.47 px) and added noise."""
     j.step(5, "running")
     if exe:
-        out, _ = _gx_run(j, exe, current, work, t, ["deconv-obj", "-strength", f"{rec['deconv']:.2f}"],
+        out, _ = _gx_run(j, exe, current, work, t, ["deconv-stellar", "-strength", f"{rec['deconv']:.2f}"],
                          "result_deconv", 5, batch=True, timeout=1800)
         if out:
             j.outputs["deconvolved"] = str(out)
-            j.step(5, "done", f"GraXpert AI deconvolution, strength {rec['deconv']:.2f}.")
+            j.step(5, "done", f"GraXpert AI stellar deconvolution, strength {rec['deconv']:.2f}.")
             return out
-        j.log("GraXpert's deconvolution isn't available here (it needs its AI model); using Siril's instead.")
-    iters = 10 if rec["deconv"] >= 0.5 else 6
-    ok, tail = _siril_try(j, work, tune, [f'load "{current.name}"', "makepsf stars -sym",
-                                          f"rl -alpha=3000 -iters={iters}"], "result_deconv", "deconv")
-    if ok:
-        j.outputs["deconvolved"] = str(work / "result_deconv.fits")
-        j.step(5, "done", f"Siril Richardson-Lucy with a PSF measured from the stars, {iters} iterations.")
-        return work / "result_deconv.fits"
-    j.step(5, "skipped", "Neither GraXpert nor Siril could deconvolve this image, so it was left as it is.")
+    j.step(5, "skipped", "Skipped: GraXpert's deconvolution model isn't installed, and other deconvolution does more "
+                         "harm than good on the DWARF's data.")
     return current
 
 
 def _denoise(j: _Job, exe: str | None, current: Path, work: Path, tune: list[str], t: dict, rec: dict) -> Path:
     j.step(6, "running")
+    note, out = "", None
     if exe:
         out, _ = _gx_run(j, exe, current, work, t, ["denoising", "-strength", f"{rec['denoise']:.2f}"],
                          "result_dn", 6, batch=True)
         if out:
-            j.outputs["denoised"] = str(out)
-            j.step(6, "done", f"GraXpert AI denoise, strength {rec['denoise']:.2f} (for {rec['minutes']:.0f} min of data).")
-            return out
-    mod = min(1.0, rec["denoise"] + 0.3)
-    ok, tail = _siril_try(j, work, tune, [f'load "{current.name}"', f"denoise -mod={mod:.2f}"], "result_dn", "denoise", 3600)
-    if ok:
-        j.outputs["denoised"] = str(work / "result_dn.fits")
-        j.step(6, "done", f"Siril's denoise (NL-Bayes), modulation {mod:.2f}.")
-        return work / "result_dn.fits"
-    j.step(6, "skipped", "Neither GraXpert nor Siril could denoise this image, so it was left as it is.")
-    return current
+            note = f"GraXpert AI denoise, strength {rec['denoise']:.2f} (for {rec['minutes']:.0f} min of data)"
+    if not out:
+        mod = min(1.0, rec["denoise"] + 0.2)
+        ok, _ = _siril_try(j, work, tune, [f'load "{current.name}"', f"denoise -mod={mod:.2f}"], "result_dn", "denoise", 3600)
+        if ok:
+            out, note = work / "result_dn.fits", f"Siril's denoise (NL-Bayes), modulation {mod:.2f}"
+    src = out or current
+    sigma = 2.5 if rec["duo"] else 1.5
+    final = work / "result_dnc.fits"
+    finishing.chroma_denoise(src, final, sigma)
+    note = (note + "; " if note else "") + (f"colour noise smoothed (σ {sigma})" +
+                                             (", stronger for Duo-Band, where only the red pixels see Hα" if rec["duo"] else ""))
+    j.outputs["denoised"] = str(final)
+    j.step(6, "done", note[:1].upper() + note[1:] + ".")
+    return final
 
 
 def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list[str], rec: dict, calibrated: bool) -> Path:
@@ -769,13 +787,14 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
              and tools._ARG_OK.match((c.get("args") or "").strip())]
     for c in extra:
         lines.append(f"{c['command']} {(c.get('args') or '').strip()}".rstrip())
-    stretch = ["autostretch -linked -2.8 0.20" if calibrated else "autostretch -2.8 0.20"]
+    # Unlinked (the background is already neutral), to a darker 11% background so the nebula has contrast.
+    stretch = ["autostretch -2.8 0.11"]
     if not any(c["command"] in ("autostretch", "asinh", "ght") for c in extra):
         lines += stretch
-        notes.append(f"{'linked' if calibrated else 'per-channel'} auto-stretch to a 20% background")
+        notes.append("auto-stretch to an 11% background")
     if not any(c["command"] == "satu" for c in extra):
-        lines.append("satu 0.3")
-        notes.append("saturation +0.3")
+        lines.append("satu 0.4 1.5")  # after the stretch, leaving the background alone
+        notes.append("saturation +0.4 on the subject, not the background")
     lines += ["save result_stretched", "savetif result_stretched", ""]
     fin = work / "overview_stretch.ssf"
     fin.write_text("\n".join(lines), encoding="utf-8")
@@ -787,8 +806,8 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
         keep = [ln for ln in lines if not any(ln.startswith(c["command"] + " ") or ln == c["command"] for c in extra)]
         if not any(ln.startswith("autostretch") for ln in keep):
             keep.insert(keep.index("save result_stretched"), stretch[0])
-        if "satu 0.3" not in keep:
-            keep.insert(keep.index("save result_stretched"), "satu 0.3")
+        if "satu 0.4 1.5" not in keep:
+            keep.insert(keep.index("save result_stretched"), "satu 0.4 1.5")
         fin.write_text("\n".join(keep), encoding="utf-8")
         notes.append(f"the plan's {', '.join(c['command'] for c in extra)} didn't run in Siril, so it used the standard stretch")
         extra = []
@@ -826,22 +845,26 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
     notes = []
     if rec["stars"] <= 0:
         notes.append("left the stars alone, as they're the subject")
-    else:
-        starless = None
-        if _starnet(j, stretched, work / "result_starless.tif"):
-            starless = finishing.read_tif(work / "result_starless.tif")
-            notes.append(f"StarNet separated the stars, which were dimmed by {int(rec['stars'] * 60)}% "
-                         "(the starless image is kept too)")
-        else:
-            notes.append(f"stars shrunk with a star mask and erosion (amount {rec['stars']:.1f}); install StarNet "
-                         "for a cleaner star reduction")
-        img = finishing.reduce_stars(img, rec["stars"], starless)
-    saved = finishing.save_final(img, work / "result_final", header)
-    out = {"final": saved["tif"], "linear": str(work / "result_linear.fits"), "folder": str(work),
-           "frames": found["count"], "cleanup_bytes": _folder_bytes(proc), "files": saved}
+    elif _starnet(j, stretched, work / "result_starless.tif"):
+        img = finishing.reduce_stars(img, rec["stars"], finishing.read_tif(work / "result_starless.tif"))
+        notes.append(f"StarNet separated the stars, which were dimmed by {int(rec['stars'] * 60)}% "
+                     "(the starless image is kept too)")
+    else:  # erosion flattened and fringed the stars in 0.8.0, so without StarNet they're left as they are
+        notes.append("stars left as they are: install StarNet++ (Setup links it) for star reduction")
+    img, gate = finishing.quality_gate(img)
+    notes += gate
+    out = {"linear": str(work / "result_linear.fits"), "folder": str(work), "frames": found["count"],
+           "cleanup_bytes": _folder_bytes(proc)}
     if rec["duo"]:
-        out["hoo"] = finishing.save_final(finishing.hoo(img), work / "result_hoo", header)["tif"]
-        notes.append("an HOO (Hα red, OIII teal) version is saved as result_hoo too")
+        # Duo-Band: Hα/OIII is the natural palette for this filter, so HOO is the main result.
+        hoo, _ = finishing.quality_gate(finishing.hoo(img))
+        saved = finishing.save_final(hoo, work / "result_final", header)
+        out["natural"] = finishing.save_final(img, work / "result_natural", header)["tif"]
+        notes.append("Duo-Band, so the main result is the HOO palette (Hα red, OIII teal); the natural-colour "
+                     "version is saved as result_natural")
+    else:
+        saved = finishing.save_final(img, work / "result_final", header)
+    out.update(final=saved["tif"], files=saved)
     notes.append("saved TIFF (16-bit), PNG, JPG and FITS")
     msg = "; ".join(notes)
     j.outputs["final"] = saved["tif"]

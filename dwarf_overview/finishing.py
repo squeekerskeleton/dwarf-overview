@@ -127,3 +127,73 @@ def save_final(img, stem: Path, header=None) -> dict:
     write_fits_rgb(stem.with_suffix(".fits"), np.flipud(img), header)
     out["fits"] = str(stem.with_suffix(".fits"))
     return out
+
+
+def _sky(c):
+    """Sky level of one channel: the median of its darker half, so nebulosity doesn't pull it up."""
+    np = _np()
+    lo = c[c <= np.percentile(c, 50)]
+    return float(np.median(lo)) if lo.size else float(np.median(c))
+
+
+def neutralise(src: Path, dst: Path) -> str:
+    """Linear data: shift each channel so their sky levels match (a neutral grey background)."""
+    np = _np()
+    img, header = read_fits_rgb(src)
+    sky = np.array([_sky(img[..., c]) for c in range(3)])
+    spread = float((sky.max() - sky.min()) / max(1e-9, sky.mean()))
+    img = img - sky + sky.mean()
+    write_fits_rgb(dst, np.clip(img, 0, None), header)
+    return f"background neutralised (channels were {spread * 100:.0f}% apart)"
+
+
+def chroma_denoise(src: Path, dst: Path, sigma: float) -> None:
+    """Smooth only the colour, not the brightness: kills the blotchy colour mottling (on the DWARF's Duo-Band data
+    the red pixels, a quarter of the sensor, carry all the Hα and are much noisier) while keeping detail."""
+    np = _np()
+    import cv2
+    img, header = read_fits_rgb(src)
+    lum = img.mean(axis=2, keepdims=True)
+    chroma = img - lum
+    chroma = np.stack([cv2.GaussianBlur(chroma[..., c], (0, 0), sigma) for c in range(3)], axis=-1)
+    write_fits_rgb(dst, np.clip(lum + chroma, 0, None), header)
+
+
+def _noise(c):
+    np = _np()
+    import cv2
+    hp = c - cv2.GaussianBlur(c, (0, 0), 2)
+    return 1.4826 * float(np.median(np.abs(hp - np.median(hp))))
+
+
+def quality(img) -> dict:
+    """Stretched RGB: how coloured the background is and how noisy each channel is."""
+    np = _np()
+    h, w = img.shape[:2]
+    core = img[h // 8: h - h // 8, w // 8: w - w // 8]
+    sky = np.array([_sky(core[..., c]) for c in range(3)])
+    noise = [_noise(core[..., c]) for c in range(3)]
+    return {"sky": sky.tolist(), "spread": float((sky.max() - sky.min()) / max(1e-6, sky.mean())), "noise": noise,
+            "red_vs_green": noise[0] / max(1e-6, noise[1])}
+
+
+def quality_gate(img) -> tuple:
+    """Check the finished image and fix what can be fixed: a coloured background is neutralised and strong colour
+    noise smoothed. Returns (image, notes)."""
+    np = _np()
+    import cv2
+    notes = []
+    q = quality(img)
+    if q["spread"] > 0.05:
+        sky = np.array(q["sky"])
+        img = np.clip(img - sky + sky.mean(), 0, 1)
+        notes.append(f"background was {q['spread'] * 100:.0f}% off neutral, now neutral")
+    if q["red_vs_green"] > 2 or q["red_vs_green"] < 0.5:
+        lum = img.mean(axis=2, keepdims=True)
+        chroma = img - lum
+        chroma = np.stack([cv2.GaussianBlur(chroma[..., c], (0, 0), 2.5) for c in range(3)], axis=-1)
+        img = np.clip(lum + chroma, 0, 1)
+        notes.append(f"colour noise was uneven (red {q['red_vs_green']:.1f}× green), smoothed")
+    after = quality(img)
+    notes.append(f"check: background {after['spread'] * 100:.1f}% off neutral, red noise {after['red_vs_green']:.1f}× green")
+    return img, notes
