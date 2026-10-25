@@ -70,7 +70,9 @@ def looks_like_moon(lum: np.ndarray) -> bool:
     n, _, stats, _ = cv2.connectedComponentsWithStats((lum > thr).astype("uint8"), connectivity=8)
     if n < 2:
         return False
-    return float(stats[1:, cv2.CC_STAT_AREA].max()) / float(stats[1:, cv2.CC_STAT_AREA].sum()) > 0.8
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    # ...and a big one (the DWARF 3's Moon is about 600 px across a 3840 px frame, 2% of it).
+    return float(areas.max()) / float(areas.sum()) > 0.8 and float(areas.max()) / lum.size > 0.005
 
 
 def _detail_center(lum: np.ndarray, inner: np.ndarray, factor: int) -> tuple[float, float]:

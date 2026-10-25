@@ -137,10 +137,21 @@
   <button id="diagBtn" title="Show Claude what you're seeing and get it fixed">Diagnose</button>
   <button id="settingsBtn">Settings</button>
   <button id="scanConnBtn" class="primary" title="Search for the DWARF until it's found (up to 30 seconds), then connect">SCAN &amp; CONNECT</button>
+  <button id="moonBtn" title="Stack every Moon shot from one night into a sharp 4K Moon">MOON STACK</button>
   <button id="lastBtn" title="Pick up an Auto-apply run that didn't finish, at the step where it stopped">LAST SESSION</button>
   <button id="pauseAll" class="stopall" style="background:#8a6d1a" title="Pause the programs the app is running (Siril, GraXpert) and frame copying; press again to resume">PAUSE ALL</button>
   <button id="stopAll" class="stopall" title="Stop the telescope moving, tracking, capturing and focusing, and stop any GraXpert or Siril run">Stop all</button>
 </header>
+<dialog id="moonDlg" style="width:min(820px,95vw)"><h2 style="margin-top:0">Moon stack (4K)</h2>
+  <p class="caption">Pick a night: every Moon shot from it (the DWARF's raw Moon sessions and its Moon videos, from the library, USB-C or Wi-Fi) is gathered, the sharpest frames are aligned patch by patch and stacked, then sharpened and centred in a 3840×2160 image. 4K videos are used when there are enough frames; raw sessions are stacked at 2× otherwise.</p>
+  <div id="moonList"></div>
+  <div class="row" style="margin-top:6px"><label for="moonSource" style="margin:0">Use</label><select id="moonSource" style="width:auto"><option value="auto">the best source (automatic)</option><option value="video">the videos</option><option value="fits">the raw sessions</option></select></div>
+  <div id="moonFrames" class="caption" style="margin-top:8px"></div>
+  <div id="moonProg" class="hidden" style="margin-top:8px"><div class="row" style="justify-content:space-between"><b id="moonPct">0%</b><span class="caption" id="moonEta"></span></div>
+    <div class="hwbar" style="height:12px"><span id="moonBar" style="width:0%"></span></div></div>
+  <div id="moonSteps" style="margin-top:6px"></div>
+  <pre id="moonLog" class="hidden" style="max-height:160px;overflow:auto"></pre>
+  <div class="row" style="justify-content:flex-end;margin-top:12px"><button id="moonClose">Close (the stack keeps going)</button></div></dialog>
 <dialog id="lastDlg" style="width:min(820px,95vw)"><h2 style="margin-top:0">Last session</h2>
   <p class="caption">Auto-apply runs that didn't finish. Resume carries on from the step where each one stopped; finished steps whose files are still there aren't redone, and frames already copied aren't copied again.</p>
   <div id="lastList"></div>
@@ -642,12 +653,13 @@ async function analyze(path, mode) {
   latestOutput = null;
   const m = current.metrics;
   drawOpenButtons(current.mode);
-  $("fileTitle").textContent = path.split(/[\\/]/).pop() + (current.mode === "moon" ? (current.kind === "video" ? " (Moon video)" : " (Moon)") : "");
+  $("fileTitle").textContent = path.split(/[\\/]/).pop() + (current.mode === "moon" ? (current.kind === "video" ? " (Moon video)" : " (Moon)") : " (deep sky)");
+  $("fileTitle").title = current.mode_reason ? `${current.mode === "moon" ? "Moon" : "Deep-sky"} mode: ${current.mode_reason}. Use the Deep sky / Moon buttons to switch.` : "";
   $("ovImg").src = "data:image/jpeg;base64," + current.overview_jpeg_b64;
   $("crImg").src = "data:image/jpeg;base64," + current.crop_jpeg_b64;
   $("crCap").textContent = current.kind === "video" ? "Same patch at 100%: sharpest frame (left), softest (right)" : current.mode === "moon" ? "100% crop on the most detailed area" : "Centre crop at 100%";
   const si0 = current.shot_info || {};
-  $("shotInfo").textContent = Object.keys(si0).length ? "shotsInfo.json: " + Object.entries(si0).filter(([, v]) => typeof v !== "object").slice(0, 10).map(([k, v]) => `${k}=${v}`).join(", ") : "No shotsInfo.json found next to this file.";
+  $("shotInfo").textContent = (current.mode_reason ? `Mode: ${current.mode === "moon" ? "Moon" : "deep sky"}, because ${current.mode_reason}. ` : "") + (Object.keys(si0).length ? "shotsInfo.json: " + Object.entries(si0).filter(([, v]) => typeof v !== "object").slice(0, 10).map(([k, v]) => `${k}=${v}`).join(", ") : "No shotsInfo.json found next to this file.");
   if (current.mode === "moon") {
     $("ovCap").textContent = current.kind === "video" ? "Sharpest sampled frame" : `${m.image.width} x ${m.image.height}, ${m.image.format}, ${m.image.bit_depth}`;
     $("metrics").innerHTML = metricCard("Subject", "The Moon", m.disk && m.disk.approx_illuminated_percent != null ? `about ${m.disk.approx_illuminated_percent}% lit` : "", "good") + moonCards(m, current.kind);
@@ -793,7 +805,7 @@ async function watchAuto(job_id, px = "auto") {
       const o = j.output; latestOutput = o.final;
       box.innerHTML = `<span class="ok">Done.</span> ${o.frames} frames processed. Result: ${esc(o.final)} (also PNG, JPG and FITS)${o.natural ? `; natural-colour version: ${esc(o.natural)}` : ""} `;
       const m = document.createElement("button"); m.textContent = "Measure the result";
-      m.onclick = () => { if ($("lastDlg").open) $("lastDlg").close(); document.querySelector('.tab[data-tab="work"]').click(); analyze(o.final, "deepsky"); };
+      m.onclick = () => { ["lastDlg", "moonDlg"].forEach((d) => $(d).open && $(d).close()); document.querySelector('.tab[data-tab="work"]').click(); analyze(o.final, o.mode || "deepsky"); };
       box.appendChild(m);
       if (o.cleanup_bytes) {
         const c = document.createElement("button"); c.textContent = `Delete Siril's working files (${gb(o.cleanup_bytes)})`; c.style.marginLeft = "6px";
@@ -801,7 +813,7 @@ async function watchAuto(job_id, px = "auto") {
           const r = await api("/api/autoprocess/cleanup", { folder: o.folder }); c.replaceWith(document.createTextNode(` Freed ${gb(r.freed_bytes)}.`)); };
         box.appendChild(c);
       }
-    } else box.innerHTML = `<span class="error">${esc(j.error || "Stopped.")}</span> LAST SESSION can pick it up again from this step.`;
+    } else box.innerHTML = `<span class="error">${esc(j.error || "Stopped.")}</span>${px === "moon" ? "" : " LAST SESSION can pick it up again from this step."}`;
     return j;
   }
 }
@@ -839,6 +851,29 @@ async function openLast() {
   });
 }
 $("lastBtn").onclick = openLast;
+
+// ---------------- MOON STACK: one night's Moon shots into a 4K Moon
+async function openMoon() {
+  $("moonList").innerHTML = '<span class="spinner"></span> Looking for Moon shots (library, DWARF over USB-C or Wi-Fi)&hellip;';
+  ["moonProg", "moonLog"].forEach((id) => $(id).classList.add("hidden")); $("moonSteps").innerHTML = ""; $("moonFrames").innerHTML = "";
+  $("moonDlg").showModal();
+  let nights;
+  try { nights = await api("/api/moon/dates"); } catch (e) { $("moonList").innerHTML = `<span class="error">${esc(e.message)}</span>`; return; }
+  if (!nights.length) { $("moonList").innerHTML = '<p class="muted">No Moon shots found. Plug the DWARF in over USB-C or connect it over Wi-Fi (or copy its Moon sessions and videos into the library), then open this again.</p>'; return; }
+  $("moonList").innerHTML = nights.map((n, i) => `<div class="step" style="margin-bottom:8px"><div class="row"><b>${esc(n.date)}</b>
+      <span class="caption">${esc(n.first)}–${esc(n.last)} · ${n.sessions} raw session${n.sessions === 1 ? "" : "s"}${n.frames ? ` (${n.frames} frames)` : ""} · ${n.videos} video${n.videos === 1 ? "" : "s"} · ${esc(n.sources.join(", "))}</span>
+      <button class="primary" data-moon="${i}" style="margin-left:auto">Stack this night</button></div></div>`).join("");
+  $("moonList").querySelectorAll("[data-moon]").forEach((b) => b.onclick = async () => {
+    const n = nights[+b.dataset.moon];
+    $("moonList").querySelectorAll("button").forEach((x) => x.disabled = true);
+    $("moonFrames").innerHTML = `<span class="spinner"></span> Stacking the Moon of ${esc(n.date)}&hellip;`;
+    try { const { job_id } = await api("/api/moon/stack", { date: n.date, source: $("moonSource").value }); await watchAuto(job_id, "moon"); }
+    catch (e) { $("moonFrames").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+    $("moonList").querySelectorAll("button").forEach((x) => x.disabled = false);
+  });
+}
+$("moonBtn").onclick = openMoon;
+$("moonClose").onclick = () => $("moonDlg").close();
 $("lastClose").onclick = () => $("lastDlg").close();
 
 $("gxRun").onclick = async () => {

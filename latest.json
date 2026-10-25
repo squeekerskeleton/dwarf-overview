@@ -1,6 +1,6 @@
 {
-  "version": "0.9.0",
-  "notes": "Much better Auto-apply finishing: neutral background after colour calibration, firmer AI denoise plus a colour-noise pass (fixes red mottling on Duo-Band), darker unlinked stretch for contrast, no more star erosion or Richardson-Lucy, a quality check before saving, HOO as the main Duo-Band result, middle-frame reference and a roundness filter when stacking. New: reuse the last stack to redo only the finishing. Ratings save as soon as you pick them, and results are no longer assessed as the Moon.",
-  "sha256": "9d25eb2d37e4762f9e4fae5cf961f05cdbb0ed04b3513c9246ea4ac35d4e6053",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.9.0.zip"
+  "version": "0.10.0",
+  "notes": "New MOON STACK: pick a night and every Moon shot from it (raw sessions and 4K videos, from the library, USB-C or Wi-Fi) is ranked, aligned patch by patch, stacked, sharpened and centred in a 3840x2160 image. The Assess tab now picks Moon or deep-sky mode from the DWARF's target, names and exposure before looking at the picture, and shows why.",
+  "sha256": "a0f30257e20b678fa01ec47bc2794ffe427f734f6907d3ff8fd307c774e6ff3e",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.10.0.zip"
 }

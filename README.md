@@ -38,6 +38,20 @@ The **History** tab lists every session, so you can see your star sizes, gradien
 
 **Night mode** turns the screen red so it doesn't ruin your night vision in the car.
 
+## MOON STACK (4K)
+
+**MOON STACK** at the top lists every night you shot the Moon, found by itself in the library, on the DWARF over USB-C, or over Wi-Fi: the DWARF's raw Moon sessions (`DWARF_RAW_TELE_Moon_...`) and its Moon videos (`Videos`). Press **Stack this night** and it:
+
+1. gathers that night's shots, leaving out any taken more than 45 minutes from the rest (the lit edge and the Moon's tilt change too much to combine);
+2. scores every frame's sharpness and keeps the best 10% (at least 30, at most 500), skipping frames where the Moon is cut off by the edge or lost in glare;
+3. aligns each kept frame to the sharpest one: rotation and shift for the whole frame (the alt-az mount turns the field), then a grid of surface patches each find their own small shift, the way AutoStakkert undoes seeing ripples; then averages them;
+4. sharpens with Richardson-Lucy and a light two-scale sharpen, keeping the limb free of halos, and balances the colour to a neutral grey;
+5. centres the Moon in a 3840×2160 image and saves `result_moon_4k` as 16-bit TIFF, PNG, JPG and FITS in `Moon_<date>` inside the processing folder.
+
+4K videos are used when there are at least 300 4K frames, since they're full sensor resolution; otherwise the raw 1920×1080 sessions are stacked at 2×. **Use** lets you pick the source yourself. A night of 4K video takes about half an hour; PAUSE ALL and Stop all work as usual.
+
+The Assess tab picks Moon or deep-sky mode by itself: from the target the DWARF recorded, then the file and folder names (and very short exposures), then the picture (one large bright disc). The reason is shown under the photo, and the Deep sky / Moon buttons switch it.
+
 ## Moon mode
 
 The app recognizes Moon images by itself. You can also switch with the **Deep sky / Moon** buttons above the preview.

@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update, control, planner, projects, setupcheck, liveview, learn, netcheck, diagnose, autoprocess, hwstats, hwprofile
+from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update, control, planner, projects, setupcheck, liveview, learn, netcheck, diagnose, autoprocess, hwstats, hwprofile, moonstack
 
 RESTART_EXIT_CODE = 3  # start-windows.bat relaunches the app when it exits with this code
 
@@ -187,6 +187,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": str(e)}, 400)
         if url.path == "/api/browse":
             return self._json(browse(q.get("folder")))
+        if url.path == "/api/moon/dates":
+            return self._json(moonstack.dates())
         if url.path == "/api/autoprocess/unfinished":
             return self._json(autoprocess.unfinished())
         if url.path == "/api/history":
@@ -403,6 +405,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"job_id": autoprocess.start(int(body["assessment_id"]), bool(body.get("include_failed")),
                                                                full_frame=body.get("full_frame", True) is not False,
                                                                reuse_stack=bool(body.get("reuse_stack")))})
+            if path == "/api/moon/stack":
+                return self._json({"job_id": moonstack.start(str(body.get("date") or ""), str(body.get("source") or "auto"))})
             if path == "/api/autoprocess/resume":
                 return self._json({"job_id": autoprocess.resume(str(body["folder"]))})
             if path == "/api/autoprocess/cleanup":
@@ -412,7 +416,7 @@ class Handler(BaseHTTPRequestHandler):
                 script = body.get("script") or a["assessment"].get("siril_script_text")
                 return self._json({"job_id": tools.run_siril_script(body.get("path") or a["file_path"], script)})
         except (assess.AssessmentError, update.UpdateError, dwarf.DwarfError, dwarfium_web.DwarfiumError,
-                scope.ScopeError, control.ControlError, projects.ProjectError, netcheck.NetError, diagnose.DiagnoseError, liveview.LiveError, autoprocess.ProcessError, KeyError) as e:
+                scope.ScopeError, control.ControlError, projects.ProjectError, netcheck.NetError, diagnose.DiagnoseError, liveview.LiveError, autoprocess.ProcessError, moonstack.MoonError, KeyError) as e:
             return self._json({"error": str(e)}, 400)
         except (FileNotFoundError, ValueError, KeyError) as e:
             return self._json({"error": str(e)}, 400)

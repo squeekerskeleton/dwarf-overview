@@ -10,6 +10,7 @@ import base64
 import io
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -438,15 +439,39 @@ def analyze(path: str | Path, mode: str = "auto") -> dict:
         return {"path": str(path), "shot_info": find_shot_info(path), "mode": "moon", "kind": "video",
                 **lunar.analyze_video(path)}
     img = load_image(path)
-    if mode == "auto" and path.stem.lower().startswith(("result_", "stacked")) and "moon" not in path.stem.lower():
-        mode = "deepsky"  # Auto-apply results and the DWARF's astro stacks are deep-sky images
+    reason = "chosen by hand"
     if mode == "auto":
-        small, _ = _downsample(img.data, 512)
-        mode = "moon" if lunar.looks_like_moon(small.mean(axis=2)) else "deepsky"
+        mode, reason = detect_mode(path, img)
     if mode == "moon":
         metrics, crop_center = lunar.measure_stack(img)
         previews = lunar.previews_for_stack(img, crop_center)
     else:
         metrics, previews = measure(img), make_previews(img)
-    return {"path": str(img.path), "shot_info": img.shot_info, "mode": mode, "kind": "image",
+    return {"path": str(img.path), "shot_info": img.shot_info, "mode": mode, "mode_reason": reason, "kind": "image",
             "metrics": metrics, **previews}
+
+
+MOON_WORDS = ("moon", "lunar", "luna")
+
+
+def detect_mode(path: Path, img: LoadedImage) -> tuple[str, str]:
+    """Moon or deep sky, from the strongest evidence first: what the DWARF wrote about the shot, the file and
+    folder names, then the picture itself (one dominant bright disc or crescent)."""
+    from . import lunar
+    info = {str(k).lower(): v for k, v in (img.shot_info or {}).items()}
+    target = str(info.get("target") or info.get("targetname") or info.get("object") or "").strip()
+    if target:
+        if any(w in target.lower() for w in MOON_WORDS):
+            return "moon", f"the DWARF recorded the target as {target}"
+        return "deepsky", f"the DWARF recorded the target as {target}"
+    names = " ".join(p.lower() for p in path.parts[-3:])
+    if any(w in names for w in MOON_WORDS):
+        return "moon", "the file or folder name says Moon"
+    if (m := re.search(r"exp_([\d.]+)", names)) and float(m.group(1)) < 0.1:
+        return "moon", f"the exposure was {m.group(1)} s, far too short for anything but the Moon or Sun"
+    if "dwarf_raw" in names or path.stem.lower().startswith(("result_", "stacked")):
+        return "deepsky", "it's a deep-sky session or Auto-apply result"
+    small, _ = _downsample(img.data, 512)
+    if lunar.looks_like_moon(small.mean(axis=2)):
+        return "moon", "the picture shows one large bright disc"
+    return "deepsky", "the picture has no Moon disc in it"
