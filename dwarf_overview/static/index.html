@@ -143,9 +143,9 @@
   <button id="stopAll" class="stopall" title="Stop the telescope moving, tracking, capturing and focusing, and stop any GraXpert or Siril run">Stop all</button>
 </header>
 <dialog id="moonDlg" style="width:min(820px,95vw)"><h2 style="margin-top:0">Moon stack (4K)</h2>
-  <p class="caption">Pick a night: every Moon shot from it (the DWARF's raw Moon sessions and its Moon videos, from the library, USB-C or Wi-Fi) is gathered, the sharpest frames are aligned patch by patch and stacked, then sharpened and centred in a 3840×2160 image. 4K videos are used when there are enough frames; raw sessions are stacked at 2× otherwise.</p>
+  <p class="caption">Pick a night: every Moon shot from it (the DWARF's raw Moon sessions and its Moon videos, from the library, USB-C or Wi-Fi) is gathered, the sharpest frames of each are aligned patch by patch and stacked together, then sharpened and centred in a 3840×2160 image.</p>
   <div id="moonList"></div>
-  <div class="row" style="margin-top:6px"><label for="moonSource" style="margin:0">Use</label><select id="moonSource" style="width:auto"><option value="auto">the best source (automatic)</option><option value="video">the videos</option><option value="fits">the raw sessions</option></select></div>
+  <div class="row" style="margin-top:6px"><label for="moonSource" style="margin:0">Use</label><select id="moonSource" style="width:auto"><option value="all">every video and raw session (best)</option><option value="video">the videos only</option><option value="fits">the raw sessions only</option></select></div>
   <div id="moonFrames" class="caption" style="margin-top:8px"></div>
   <div id="moonProg" class="hidden" style="margin-top:8px"><div class="row" style="justify-content:space-between"><b id="moonPct">0%</b><span class="caption" id="moonEta"></span></div>
     <div class="hwbar" style="height:12px"><span id="moonBar" style="width:0%"></span></div></div>
@@ -188,6 +188,17 @@
         <div class="previews"><div><img id="ovImg" alt="Whole frame preview"><div class="caption" id="ovCap"></div></div>
           <div><img id="crImg" alt="Crop at 100%"><div class="caption" id="crCap">Centre crop at 100%</div></div></div>
         <div id="shotInfo" class="caption"></div>
+      </div>
+      <div class="card hidden" id="mautoCard" style="border:1px solid var(--accent)">
+        <h2>Auto-stack this night's Moon (4K)</h2>
+        <p class="caption" id="mautoNight">Looking for the other Moon shots from this night&hellip;</p>
+        <div class="row"><button class="primary" id="mautoRun">Auto-stack (4K)</button>
+          <select id="mautoSource" style="width:auto"><option value="all">every video and raw session (best)</option><option value="video">videos only</option><option value="fits">raw sessions only</option></select></div>
+        <div id="mautoFrames" class="caption" style="margin-top:6px">Ranks every frame of this photo or video and of every other Moon shot from the same night, aligns the sharpest patch by patch, stacks them, sharpens and centres the Moon in a 3840×2160 image.</div>
+        <div id="mautoProg" class="hidden" style="margin-top:8px"><div class="row" style="justify-content:space-between"><b id="mautoPct">0%</b><span class="caption" id="mautoEta"></span></div>
+          <div class="hwbar" style="height:12px"><span id="mautoBar" style="width:0%"></span></div></div>
+        <div id="mautoSteps" style="margin-top:6px"></div>
+        <pre id="mautoLog" class="hidden" style="max-height:160px;overflow:auto"></pre>
       </div>
       <div class="card"><h2>Measurements</h2><div class="metrics" id="metrics"></div></div>
       <div class="card">
@@ -653,6 +664,7 @@ async function analyze(path, mode) {
   latestOutput = null;
   const m = current.metrics;
   drawOpenButtons(current.mode);
+  drawMoonCard();
   $("fileTitle").textContent = path.split(/[\\/]/).pop() + (current.mode === "moon" ? (current.kind === "video" ? " (Moon video)" : " (Moon)") : " (deep sky)");
   $("fileTitle").title = current.mode_reason ? `${current.mode === "moon" ? "Moon" : "Deep-sky"} mode: ${current.mode_reason}. Use the Deep sky / Moon buttons to switch.` : "";
   $("ovImg").src = "data:image/jpeg;base64," + current.overview_jpeg_b64;
@@ -813,7 +825,7 @@ async function watchAuto(job_id, px = "auto") {
           const r = await api("/api/autoprocess/cleanup", { folder: o.folder }); c.replaceWith(document.createTextNode(` Freed ${gb(r.freed_bytes)}.`)); };
         box.appendChild(c);
       }
-    } else box.innerHTML = `<span class="error">${esc(j.error || "Stopped.")}</span>${px === "moon" ? "" : " LAST SESSION can pick it up again from this step."}`;
+    } else box.innerHTML = `<span class="error">${esc(j.error || "Stopped.")}</span>${["moon", "mauto"].includes(px) ? "" : " LAST SESSION can pick it up again from this step."}`;
     return j;
   }
 }
@@ -862,17 +874,41 @@ async function openMoon() {
   if (!nights.length) { $("moonList").innerHTML = '<p class="muted">No Moon shots found. Plug the DWARF in over USB-C or connect it over Wi-Fi (or copy its Moon sessions and videos into the library), then open this again.</p>'; return; }
   $("moonList").innerHTML = nights.map((n, i) => `<div class="step" style="margin-bottom:8px"><div class="row"><b>${esc(n.date)}</b>
       <span class="caption">${esc(n.first)}–${esc(n.last)} · ${n.sessions} raw session${n.sessions === 1 ? "" : "s"}${n.frames ? ` (${n.frames} frames)` : ""} · ${n.videos} video${n.videos === 1 ? "" : "s"} · ${esc(n.sources.join(", "))}</span>
-      <button class="primary" data-moon="${i}" style="margin-left:auto">Stack this night</button></div></div>`).join("");
+      <button class="primary" data-moon="${i}" style="margin-left:auto">Stack this night</button></div>
+      <div class="caption" style="margin-top:4px">${(n.items || []).map((it) => `<label style="display:flex;gap:6px;align-items:center;margin:2px 0;font-weight:normal"><input type="checkbox" checked data-night="${i}" data-item="${esc(it.name)}" style="width:auto">
+        ${it.kind === "video" ? "🎞 Video" : "📷 Raw session"} ${esc(it.time)} · ${it.kind === "video" ? (it.size ? gb(it.size) : "") : `${it.frames || "?"} frames`} · ${esc(it.source)} <span class="muted">${esc(it.name)}</span></label>`).join("")}</div></div>`).join("") +
+    `<label for="moonExtra" style="margin-top:8px">Also include a Moon video from elsewhere (optional, full path)</label><input id="moonExtra" placeholder="e.g. D:\\Moon videos\\moon_2026-10-23.mp4">`;
   $("moonList").querySelectorAll("[data-moon]").forEach((b) => b.onclick = async () => {
     const n = nights[+b.dataset.moon];
     $("moonList").querySelectorAll("button").forEach((x) => x.disabled = true);
     $("moonFrames").innerHTML = `<span class="spinner"></span> Stacking the Moon of ${esc(n.date)}&hellip;`;
-    try { const { job_id } = await api("/api/moon/stack", { date: n.date, source: $("moonSource").value }); await watchAuto(job_id, "moon"); }
+    const exclude = [...$("moonList").querySelectorAll(`input[data-night="${b.dataset.moon}"]`)].filter((c) => !c.checked).map((c) => c.dataset.item);
+    try { const { job_id } = await api("/api/moon/stack", { date: n.date, source: $("moonSource").value, exclude, path: $("moonExtra").value.trim() || undefined }); await watchAuto(job_id, "moon"); }
     catch (e) { $("moonFrames").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
     $("moonList").querySelectorAll("button").forEach((x) => x.disabled = false);
   });
 }
 $("moonBtn").onclick = openMoon;
+// The Assess tab's Moon card: auto-stack the night of the photo or video that's open.
+async function drawMoonCard() {
+  const on = current && current.mode === "moon";
+  $("mautoCard").classList.toggle("hidden", !on);
+  if (!on || $("mautoRun").disabled) return;
+  ["mautoProg", "mautoLog"].forEach((id) => $(id).classList.add("hidden")); $("mautoSteps").innerHTML = "";
+  $("mautoNight").textContent = "Looking for the other Moon shots from this night…";
+  try {
+    const n = await api("/api/moon/night?path=" + encodeURIComponent(current.path));
+    $("mautoNight").textContent = n.sessions || n.videos
+      ? `${n.date}, ${n.first}–${n.last}: ${n.videos} video${n.videos === 1 ? "" : "s"} and ${n.sessions} raw session${n.sessions === 1 ? "" : "s"}${n.frames ? ` (${n.frames} frames)` : ""}, from ${n.sources.join(", ")}. They're all stacked together.`
+      : `${n.date}: no other Moon shots found for this night yet (plug in the DWARF or connect it over Wi-Fi to include its sessions and videos).`;
+  } catch (e) { $("mautoNight").innerHTML = `<span class="warn">${esc(e.message)}</span>`; }
+}
+$("mautoRun").onclick = async () => {
+  $("mautoRun").disabled = true;
+  try { const { job_id } = await api("/api/moon/stack", { path: current.path, source: $("mautoSource").value }); await watchAuto(job_id, "mauto"); }
+  catch (e) { $("mautoFrames").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+  $("mautoRun").disabled = false;
+};
 $("moonClose").onclick = () => $("moonDlg").close();
 $("lastClose").onclick = () => $("lastDlg").close();
 

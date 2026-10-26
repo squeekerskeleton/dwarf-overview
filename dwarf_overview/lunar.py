@@ -237,7 +237,8 @@ def analyze_video(path: Path) -> dict:
         if n <= 0:
             raise ValueError("The video has no frames.")
         idx = np.unique(np.linspace(0, n - 1, min(n, SAMPLE_FRAMES)).astype(int))
-        scores, bright, cents, edge, sat, frames = [], [], [], [], [], {}
+        scores, bright, cents, edge, sat = [], [], [], [], []
+        best = worst = None  # only the sharpest and softest frames are kept: 240 4K frames would need ~24 GB
         for i in idx:
             fr = reader.read(int(i))
             if fr is None:
@@ -253,16 +254,17 @@ def analyze_video(path: Path) -> dict:
             cents.append((float(ys.mean()) / lum.shape[0], float(xs.mean()) / lum.shape[1]) if ys.size else (0.5, 0.5))
             edge.append(bool(m[0].any() or m[-1].any() or m[:, 0].any() or m[:, -1].any()))
             sat.append(float(np.mean(fr.max(axis=2) >= 0.995)))
-            frames[int(i)] = fr
+            if best is None or scores[-1] >= best[0]:
+                best = (scores[-1], fr)
+            if worst is None or scores[-1] <= worst[0]:
+                worst = (scores[-1], fr)
     finally:
         reader.close()
     if not scores:
         raise ValueError("Couldn't read any frames from this video.")
 
     s = np.array(scores)
-    order = np.argsort(-s)
-    keys = list(frames)
-    best, worst = frames[keys[int(order[0])]], frames[keys[int(order[-1])]]
+    best, worst = best[1], worst[1]
     cents = np.array(cents)
     p90 = float(np.percentile(s, 90))
     good = float(np.mean(s >= 0.85 * p90))

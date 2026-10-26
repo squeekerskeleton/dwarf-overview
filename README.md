@@ -48,7 +48,9 @@ The **History** tab lists every session, so you can see your star sizes, gradien
 4. sharpens with Richardson-Lucy and a light two-scale sharpen, keeping the limb free of halos, and balances the colour to a neutral grey;
 5. centres the Moon in a 3840×2160 image and saves `result_moon_4k` as 16-bit TIFF, PNG, JPG and FITS in `Moon_<date>` inside the processing folder.
 
-4K videos are used when there are at least 300 4K frames, since they're full sensor resolution; otherwise the raw 1920×1080 sessions are stacked at 2×. **Use** lets you pick the source yourself. A night of 4K video takes about half an hour; PAUSE ALL and Stop all work as usual.
+Videos and raw sessions from the same night are stacked **together**: 4K videos at full size, HD videos and the raw 1920×1080 sessions at 2×. Each video and session is ranked against itself and gives its best tenth, and every frame's tones are matched to the reference so gamma-encoded video and linear raw frames average cleanly. Each night has tick boxes for its videos and sessions, so you can leave one out; the **Also include a Moon video from elsewhere** box takes a full path to a video or session anywhere else on your PC; **Use** limits the stack to videos or raw frames only. A night of 4K video takes about half an hour; PAUSE ALL and Stop all work as usual.
+
+**From the Assess tab:** when you assess any Moon photo, video or raw frame, an **Auto-stack this night's Moon (4K)** card appears under the results. It shows what that night has and, with one click, stacks the file you assessed together with every other Moon video and raw session from the same night.
 
 The Assess tab picks Moon or deep-sky mode by itself: from the target the DWARF recorded, then the file and folder names (and very short exposures), then the picture (one large bright disc). The reason is shown under the photo, and the Deep sky / Moon buttons switch it.
 

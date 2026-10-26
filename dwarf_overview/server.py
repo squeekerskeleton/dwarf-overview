@@ -189,6 +189,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(browse(q.get("folder")))
         if url.path == "/api/moon/dates":
             return self._json(moonstack.dates())
+        if url.path == "/api/moon/night":
+            return self._json(moonstack.night(moonstack.date_of(q.get("path", ""))))
         if url.path == "/api/autoprocess/unfinished":
             return self._json(autoprocess.unfinished())
         if url.path == "/api/history":
@@ -406,7 +408,9 @@ class Handler(BaseHTTPRequestHandler):
                                                                full_frame=body.get("full_frame", True) is not False,
                                                                reuse_stack=bool(body.get("reuse_stack")))})
             if path == "/api/moon/stack":
-                return self._json({"job_id": moonstack.start(str(body.get("date") or ""), str(body.get("source") or "auto"))})
+                date = str(body.get("date") or "") or moonstack.date_of(str(body["path"]))
+                return self._json({"job_id": moonstack.start(date, str(body.get("source") or "all"), body.get("path"),
+                                                             [str(x) for x in body.get("exclude") or []]), "date": date})
             if path == "/api/autoprocess/resume":
                 return self._json({"job_id": autoprocess.resume(str(body["folder"]))})
             if path == "/api/autoprocess/cleanup":

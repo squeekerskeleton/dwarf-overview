@@ -17,8 +17,9 @@ The stack is lucky imaging, the way AutoStakkert works, done here so it needs no
    from ringing;
 5. the Moon is centred in a 3840x2160 frame and saved as 16-bit TIFF, PNG, JPG and FITS.
 
-4K videos are preferred when there are enough frames: they're full sensor resolution. Raw FITS frames (half
-resolution) are stacked at 2x so they still make a 4K image.
+By default every Moon video and raw session of the night is stacked together: 4K video frames as they are, HD
+video and raw FITS frames (1920x1080) at 2x, each source ranked against itself, tones matched to the reference
+frame, and native 4K frames weighted highest. Videos only or raw sessions only can be picked instead.
 """
 from __future__ import annotations
 
@@ -147,10 +148,12 @@ def dates() -> list[dict]:
             d["frames"] += i["frames"] or 0
         else:
             d["videos"] += 1
+        d.setdefault("items", []).append({"name": i["name"], "kind": i["kind"], "time": i["when"].strftime("%H:%M:%S"),
+                                          "frames": i.get("frames"), "size": i.get("size"), "source": i["source"]})
     out = []
     for d in sorted(by.values(), key=lambda d: d["date"], reverse=True):
         out.append({**d, "sources": sorted(d["sources"]), "first": d["first"].strftime("%H:%M"),
-                    "last": d["last"].strftime("%H:%M")})
+                    "last": d["last"].strftime("%H:%M"), "items": sorted(d.get("items", []), key=lambda i: i["time"])})
     return out
 
 
@@ -313,7 +316,8 @@ def _local_map(ref_g, img_g, mask, patch: int = 160, step: int = 128, max_shift:
             r = ref_g[y:y + patch, x:x + patch]
             if r.std() < 1e-3:
                 continue
-            (dx, dy), resp = cv2.phaseCorrelate(r, img_g[y:y + patch, x:x + patch], win)
+            # Copies: OpenCV applies the window to its inputs in place, which would darken the reference.
+            (dx, dy), resp = cv2.phaseCorrelate(r.copy(), img_g[y:y + patch, x:x + patch].copy(), win)
             if resp > 0.15 and abs(dx) < max_shift and abs(dy) < max_shift:
                 gx[a, b], gy[a, b], ok[a, b] = dx, dy, True
     if ok.sum() < 4:
@@ -329,11 +333,63 @@ def _local_map(ref_g, img_g, mask, patch: int = 160, step: int = 128, max_shift:
 
 # ---------------------------------------------------------------- the job
 
-def start(date: str, source: str = "auto") -> str:
+def date_of(path: str) -> str:
+    """The night a Moon photo, frame or video belongs to (YYYY-MM-DD)."""
+    p = Path(path)
+    for name in (p.name, p.parent.name):
+        if w := _when(name):
+            return w.strftime("%Y-%m-%d")
+    if p.suffix.lower() in (".fits", ".fit"):
+        try:
+            from astropy.io import fits as pf
+            if w := _when(str(pf.getheader(p).get("DATE-OBS", "")).replace(":", "")):
+                return w.strftime("%Y-%m-%d")
+        except (OSError, ValueError):
+            pass
+    try:
+        return datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d")
+    except OSError:
+        raise MoonError("Couldn't tell which night this was taken.")
+
+
+def night(date: str) -> dict:
+    """What a night has, for the Assess tab's Moon card."""
+    return next((d for d in dates() if d["date"] == date), {"date": date, "sessions": 0, "frames": 0, "videos": 0,
+                                                           "sources": [], "first": "", "last": ""})
+
+
+def _picked(path: str) -> dict | None:
+    """A Moon video or raw frame the person opened themselves, possibly from a folder the app doesn't search."""
+    p = Path(path)
+    if not p.is_file():
+        return None
+    from .lunar import VIDEO_EXTS
+    when = _when(p.name, p.stat().st_mtime)
+    if p.suffix.lower() in VIDEO_EXTS:
+        return {"kind": "video", "name": p.name, "where": str(p), "source": "picked", "when": when, "size": p.stat().st_size}
+    if p.suffix.lower() in (".fits", ".fit") and _is_moon_session(p.parent.name):
+        frames = [f for f in p.parent.iterdir() if f.suffix.lower() in (".fits", ".fit")
+                  and not f.name.lower().startswith(("failed", "stacked"))]
+        return {"kind": "fits", "name": p.parent.name, "where": str(p.parent), "source": "picked",
+                "when": _when(p.parent.name, p.stat().st_mtime), "frames": len(frames)}
+    return None
+
+
+def start(date: str, source: str = "all", include: str | None = None, exclude: list[str] | None = None) -> str:
+    """Stack a night. include: a file the person opened (always used, even from outside the library and the
+    DWARF); exclude: names of videos or sessions they unticked."""
     from .autoprocess import _Job, work_root
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date or ""):
         raise MoonError("Pick a date.")
-    items = [i for i in _all_items() if i["when"].strftime("%Y-%m-%d") == date]
+    items = [i for i in _all_items() if i["when"].strftime("%Y-%m-%d") == date and i["name"] not in (exclude or [])]
+    extra = _picked(include) if include else None
+    if extra and extra["name"] not in {i["name"] for i in items}:
+        extra["must"] = True
+        items.append(extra)
+    elif extra:
+        for i in items:
+            if i["name"] == extra["name"]:
+                i["must"] = True
     if not items:
         raise MoonError(f"No Moon shots found for {date}. Plug the DWARF in over USB-C, connect it over Wi-Fi, "
                         "or copy its Moon sessions and videos into the library.")
@@ -358,13 +414,37 @@ def _run(j, items, source, work, date) -> None:
             j.job.update(state="failed", error=str(e))
 
 
+def _tone_match(img, ref_l, mask):
+    """Give a frame the reference's tones on the disc (quantile matching). Raw FITS frames are linear and the
+    videos are gamma-encoded, and exposures differ, so this is what lets them be averaged together."""
+    import numpy as np
+    lum = img.mean(axis=2)
+    sel = mask & (lum > 0)
+    if sel.sum() < 1000:
+        return img
+    q = np.linspace(0.5, 99.8, 64)
+    a, b = np.percentile(lum[sel], q), np.percentile(ref_l[sel], q)
+    a = np.maximum.accumulate(a + np.arange(64) * 1e-7)  # strictly increasing for interp
+    new = np.interp(lum, a, b, left=None, right=None)
+    lo = lum < a[0]  # darker than the disc (sky, shadowed edge): scale down towards black, never clamp up
+    new[lo] = lum[lo] * (b[0] / max(1e-6, a[0]))
+    hi = lum > a[-1]  # beyond the matched range: carry on with the last slope
+    if hi.any():
+        slope = (b[-1] - b[-8]) / max(1e-6, a[-1] - a[-8])
+        new[hi] = b[-1] + (lum[hi] - a[-1]) * slope
+    return img * (new / np.maximum(lum, 1e-6))[..., None]
+
+
 def _pipeline(j, items, source, work: Path, date: str) -> dict:
     import numpy as np
     import cv2
 
-    # 1. which shots
+    # 1. which shots: by default every Moon video and raw session from the night, together
     j.step(0, "running")
     keep, left = _cluster(items)
+    for i in [i for i in left if i.get("must")]:  # what the person picked is always stacked
+        keep.append(i)
+        left.remove(i)
     videos = [i for i in keep if i["kind"] == "video"]
     fits = [i for i in keep if i["kind"] == "fits"]
     vinfo = {}
@@ -373,46 +453,53 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
             vinfo[v["name"]] = _video_info(_video_path(v, work, j))
         except Exception as e:
             j.log(f"Skipping {v['name']}: {e}")
-    big = [v for v in videos if v["name"] in vinfo and vinfo[v["name"]][0] >= 3000]
-    big_frames = sum(vinfo[v["name"]][2] for v in big)
-    use = source if source in ("video", "fits") else ("video" if big_frames >= 300 else "fits" if fits else "video")
-    if use == "video":
-        chosen = big or [v for v in videos if v["name"] in vinfo]
-        if chosen and not big:  # only HD videos: stack at their size, then fit to 4K
-            res = max(vinfo[v["name"]][:2] for v in chosen)
-            chosen = [v for v in chosen if vinfo[v["name"]][:2] == res]
-    else:
-        chosen = fits
-    if not chosen:
+    videos = [v for v in videos if v["name"] in vinfo and vinfo[v["name"]][2] > 0]
+    if source == "video":
+        fits = []
+    elif source == "fits":
+        videos = []
+    if not videos and not fits:
         raise MoonError("None of that night's shots can be stacked here (no Moon videos or raw Moon sessions).")
-    note = (f"{len(chosen)} {'video' if use == 'video' else 'raw session'}{'s' if len(chosen) > 1 else ''} from "
-            f"{min(i['when'] for i in chosen):%H:%M} to {max(i['when'] for i in chosen):%H:%M}"
-            + (f" ({big_frames} 4K video frames, full sensor resolution)" if use == "video" and big else
-               " (raw 16-bit frames, stacked at 2x for 4K)" if use == "fits" else ""))
+    # Everything is brought to 4K: 4K videos as they are, HD videos and raw FITS (1920x1080) at 2x.
+    sources = []
+    for v in videos:
+        w, h, n = vinfo[v["name"]]
+        sources.append({**v, "up": 1 if w >= 3000 else 2, "n": n, "weight": 1.0 if w >= 3000 else 0.6})
+    for f in fits:
+        sources.append({**f, "up": 2, "n": f.get("frames") or 120, "weight": 0.7})
+    total = sum(s["n"] for s in sources)
+    parts = []
+    nv, nf = sum(s["n"] for s in sources if s["kind"] == "video"), sum(s["n"] for s in sources if s["kind"] == "fits")
+    if nv:
+        parts.append(f"{sum(1 for s in sources if s['kind'] == 'video')} video(s), {nv} frames")
+    if nf:
+        parts.append(f"{sum(1 for s in sources if s['kind'] == 'fits')} raw session(s), about {nf} frames")
+    note = (f"{' and '.join(parts)}, from {min(s['when'] for s in sources):%H:%M} to {max(s['when'] for s in sources):%H:%M}, "
+            "all stacked together at 4K")
     if left:
         note += f"; left out {len(left)} shot(s) taken more than {CLUSTER_MIN} min from the rest"
     j.step(0, "done", note + ".")
 
-    # 2. score every frame
-    j.step(1, "running")
     bayer: dict = {}
-    frames = []  # (score, source index, frame index or path, brightness)
 
-    def each_frame():
-        for si, it in enumerate(chosen):
-            if use == "video":
-                p = _video_path(it, work, j)
-                for k, img in _video_frames(p):
+    def each_frame(only=None):
+        for si, s in enumerate(sources):
+            if only is not None and si not in only:
+                continue
+            if s["kind"] == "video":
+                for k, img in _video_frames(_video_path(s, work, j)):
                     yield si, k, img
             else:
                 from astropy.io import fits as pf
-                for f in _fits_frames(it, work, j):
+                for f in _fits_frames(s, work, j):
                     try:
-                        yield si, f, _debayer(np.asarray(pf.getdata(f)), bayer)
+                        yield si, f.name, _debayer(np.asarray(pf.getdata(f)), bayer)
                     except (OSError, ValueError, TypeError):
                         continue
 
-    total = sum(vinfo[i["name"]][2] for i in chosen) if use == "video" else sum(i.get("frames") or 120 for i in chosen)
+    # 2. score every frame
+    j.step(1, "running")
+    frames = []  # (score, source, frame key, brightness)
     n = 0
     for si, k, img in each_frame():
         j.wait_if_paused()
@@ -426,61 +513,64 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
             j.part(1, n / max(1, total))
     if len(frames) < 5:
         raise MoonError("Fewer than 5 usable Moon frames (the disc was missing, cut off by the frame edge or lost in glare).")
-    if use == "fits":  # sessions differ in exposure and gain, so rank each against its own median
-        meds = {si: float(np.median([f[0] for f in frames if f[1] == si])) or 1.0 for si in {f[1] for f in frames}}
-        frames = [(f[0] / meds[f[1]], *f[1:]) for f in frames]
-    frames.sort(key=lambda f: -f[0])
-    n_keep = int(min(MAX_KEEP, max(MIN_KEEP, len(frames) * KEEP)))
-    best = frames[:n_keep]
-    j.step(1, "done", f"Scored {n} frames; keeping the sharpest {len(best)} ({100 * len(best) / len(frames):.0f}% of the usable ones).")
+    # Each source is ranked against itself (resolution, exposure and gain differ), and the best ~10% of each kept.
+    best = []
+    budget = int(min(MAX_KEEP, max(MIN_KEEP, len(frames) * KEEP)))
+    for si in sorted({f[1] for f in frames}):
+        mine = sorted((f for f in frames if f[1] == si), key=lambda f: -f[0])
+        share = max(3, round(budget * len(mine) / len(frames)))
+        best += mine[:share]
+    best.sort(key=lambda f: -f[0] * sources[f[1]]["weight"])
+    j.step(1, "done", f"Scored {n} frames; keeping the sharpest {len(best)}, about a tenth of each video and session.")
 
-    # 3. align and stack
+    # 3. align and stack, all on the sharpest frame from the best source
     j.step(2, "running")
-    up = 2 if use == "fits" else 1
-    wanted = {(f[1], f[2]): f for f in best}
-    ref_key = (best[0][1], best[0][2])
-    ref = None
-    for si, k, img in each_frame():
-        if (si, k) == ref_key:
-            ref = img
-            break
-    if up > 1:
-        ref = cv2.resize(ref, None, fx=up, fy=up, interpolation=cv2.INTER_CUBIC)
+    ref_f = max(best, key=lambda f: (sources[f[1]]["up"] == 1, f[0]))
+    ref = next(img for si, k, img in each_frame({ref_f[1]}) if k == ref_f[2])
+    if sources[ref_f[1]]["up"] > 1:
+        ref = cv2.resize(ref, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
     ref_small, scale = _gray_small(ref)
     ref_g = ref.mean(axis=2).astype("float32")
-    ref_mask_small, ref_bright = _disc(ref_small)
-    ref_mask = cv2.resize(ref_mask_small.astype("uint8"), (ref_g.shape[1], ref_g.shape[0]), interpolation=cv2.INTER_NEAREST)
+    h, w = ref_g.shape
+    ref_mask = cv2.resize(_disc(ref_small)[0].astype("uint8"), (w, h), interpolation=cv2.INTER_NEAREST)
+    disc_mask = ref_mask.astype(bool)
+    wanted = {(f[1], f[2]) for f in best}
     acc = np.zeros_like(ref, dtype="float64")
-    used, done = 0, 0
-    for si, k, img in each_frame():
+    wsum, done, by_kind = 0.0, 0, {"video": 0, "fits": 0}
+    for si, k, img in each_frame({f[1] for f in best}):
         if (si, k) not in wanted:
             continue
         j.wait_if_paused()
         if j.stopped():
             raise MoonError("Stopped.")
-        f = wanted[(si, k)]
-        if up > 1:
-            img = cv2.resize(img, None, fx=up, fy=up, interpolation=cv2.INTER_CUBIC)
-        img = img * (ref_bright / max(1e-6, f[3]))  # even out exposure differences between sessions
+        src = sources[si]
+        if src["up"] > 1:
+            img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        if img.shape[:2] != (h, w):  # a different resolution than the reference: fit it
+            img = cv2.resize(img, (w, h), interpolation=cv2.INTER_CUBIC)
         small, _ = _gray_small(img)
         warp = _global_warp(ref_small, small, scale)
-        h, w = ref_g.shape
         img = cv2.warpAffine(img, warp, (w, h), flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
+        img = _tone_match(img, ref_g, disc_mask)
         lm = _local_map(ref_g, img.mean(axis=2).astype("float32"), ref_mask)
         if lm is not None:
             img = cv2.remap(img, lm[0], lm[1], cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-        acc += img
-        used += 1
+        acc += img * src["weight"]
+        wsum += src["weight"]
         done += 1
+        by_kind[src["kind"]] += 1
         j.part(2, done / len(best))
         if done % 25 == 0:
             j.log(f"Aligned and stacked {done} of {len(best)}")
-    stack = (acc / max(1, used)).astype("float32")
-    j.step(2, "done", f"Stacked {used} frames: rotation and shift per frame, then surface patches aligned one by one.")
+    stack = (acc / max(1e-6, wsum)).astype("float32")
+    mix = " and ".join(x for x in (f"{by_kind['video']} video frames" if by_kind["video"] else "",
+                                   f"{by_kind['fits']} raw frames" if by_kind["fits"] else "") if x)
+    j.step(2, "done", f"Stacked {done} frames ({mix}): rotation and shift per frame, tones matched to the reference, "
+                      "then surface patches aligned one by one.")
 
     # 4. sharpen
     j.step(3, "running")
-    sharp, snote = _sharpen(stack, linear=(use == "fits"), up=up)
+    sharp, snote = _sharpen(stack, linear=False, up=sources[ref_f[1]]["up"])
     j.step(3, "done", snote)
 
     # 5. 4K frame
@@ -488,11 +578,11 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
     canvas = _centre(sharp)
     stem = work / "result_moon_4k"
     saved = finishing.save_final(canvas, stem)
-    (work / "moon_stack.json").write_text(json.dumps({"date": date, "source": use, "frames_used": used,
-                                                      "shots": [i["name"] for i in chosen]}, indent=1), encoding="utf-8")
+    (work / "moon_stack.json").write_text(json.dumps({"date": date, "source": source, "frames_used": done,
+                                                      "shots": [s["name"] for s in sources]}, indent=1), encoding="utf-8")
     j.outputs["final"] = saved["tif"]
     j.step(4, "done", f"Saved {OUT_W}×{OUT_H}: {saved['tif']} (also PNG, JPG and FITS).")
-    return {"final": saved["tif"], "folder": str(work), "frames": used, "files": saved, "mode": "moon"}
+    return {"final": saved["tif"], "folder": str(work), "frames": done, "files": saved, "mode": "moon"}
 
 
 def _sharpen(img, linear: bool, up: int):
@@ -520,8 +610,9 @@ def _sharpen(img, linear: bool, up: int):
     lum = x.mean(axis=2)
     disc = cv2.GaussianBlur((lum > 0.06).astype("float32"), (0, 0), 3)[..., None]
     out = out * disc + x * (1 - disc)
-    lo = float(np.percentile(out.mean(axis=2), 2))
-    out = np.clip((out - lo) / max(1e-6, float(np.percentile(out, 99.97)) - lo), 0, 1)
+    # The levels were set before sharpening (sky black, brightest crater rims white): keep them and clip the
+    # overshoot, so a few over-sharpened rims can't dim the whole Moon.
+    out = np.clip(out, 0, 1)
     return out, f"Richardson-Lucy (12 iterations, PSF σ {sigma}) and a light two-scale sharpen; the limb and sky are protected from halos."
 
 
