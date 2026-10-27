@@ -606,11 +606,17 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
           f"{', ' + rec['kind'] if rec['kind'] else ''}.")
     j.step(0, "running", f"{found['count']} frames for {found['session']}" +
            (f" ({found['failed']} the DWARF rejected are included)" if found["failed"] else "") + ".")
-    copied = _copy_frames(j, found, lights)
-    failed_note = _screen_failed(j, work, lights, j.meta.get("include_failed"))
-    dark_note = _master_dark(j, found, shot, work, lights)
-    ready = sum(1 for f in lights.iterdir() if f.is_file() and FRAME.search(f.name))
-    j.step(0, "done", f"{ready} frames ready to stack in {lights} ({copied} copied). {failed_note} {dark_note}".replace("  ", " "))
+    s1 = prev.get(1) or {}
+    if s1.get("state") == "done" and prev_out.get("stacked") and Path(prev_out["stacked"]).exists():
+        # The stack is reused, so the frames aren't needed: copying 16 GB to the fast drive and moving it back
+        # took over half of a 6-minute C 33 re-run.
+        j.step(0, "done", f"Frames not copied: the last stack is reused ({found['count']} frames stay where they are).")
+    else:
+        copied = _copy_frames(j, found, lights)
+        failed_note = _screen_failed(j, work, lights, j.meta.get("include_failed"))
+        dark_note = _master_dark(j, found, shot, work, lights)
+        ready = sum(1 for f in lights.iterdir() if f.is_file() and FRAME.search(f.name))
+        j.step(0, "done", f"{ready} frames ready to stack in {lights} ({copied} copied). {failed_note} {dark_note}".replace("  ", " "))
 
     # 2. restack
     stacked = work / "result_stack.fits"
@@ -996,13 +1002,14 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
     img, info = finishing.colour_stretch(img, target_bg=target)
     stars = finishing.star_mask(img)
     img = finishing.cap_star_colour(finishing.saturation(img, 0.35, stars=stars), stars)
+    img = finishing.sky_smooth(img, stars)
     finishing.write_fits_rgb(work / "result_stretched.fits", img, header)
     import tifffile
     import numpy as np
     tifffile.imwrite(str(out), (np.clip(img, 0, 1) * 65535 + 0.5).astype("uint16"), photometric="rgb")
     notes.append(f"colour-keeping stretch to a {int(target * 100)}% sky (brightness stretched, colour ratios kept, "
                  "sky noise kept grey); saturation +35% on the subject, not the sky or the stars; star colour capped "
-                 "so stars keep a tint instead of turning into red or cyan discs")
+                 "so stars keep a tint instead of turning into red or cyan discs; faint sky smoothed (brightness only)")
     msg = "; ".join(notes)
     j.outputs["stretched"] = str(out)
     j.step(7, "done", msg[:1].upper() + msg[1:] + ".")

@@ -1,6 +1,6 @@
 {
-  "version": "0.12.2",
-  "notes": "Colour-noise smoothing skips the stars, so star colour no longer smears into coloured rings.",
-  "sha256": "06bfcf563da4f17a3f9c02930d02a09520c066687f6293f61b8f26dcac54dbef",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.2.zip"
+  "version": "0.12.3",
+  "notes": "Less sky grain (black point further below the sky, light sky smoothing), stars balanced to white, star mask ignores nebula filaments, HOO sky neutralised, reuse-the-stack re-runs no longer copy the frames.",
+  "sha256": "1d29631bebe2564b458ebfedab4ec9ddc63b26ba038fc291aeecfe09866a1787",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.3.zip"
 }

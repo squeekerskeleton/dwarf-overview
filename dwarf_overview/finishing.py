@@ -185,14 +185,14 @@ def quality(img) -> dict:
             "red_vs_green": noise[0] / max(1e-6, noise[1])}
 
 
-def quality_gate(img) -> tuple:
+def quality_gate(img, tol: float = 0.02) -> tuple:
     """Check the finished image and fix what can be fixed: a coloured background is neutralised and strong colour
     noise smoothed. Returns (image, notes)."""
     np = _np()
     import cv2
     notes = []
     q = quality(img)
-    if q["spread"] > 0.05:
+    if q["spread"] > tol:
         sky = np.array(q["sky"])
         img = np.clip(img - sky + sky.mean(), 0, 1)
         notes.append(f"background was {q['spread'] * 100:.0f}% off neutral, now neutral")
@@ -212,7 +212,7 @@ def quality_gate(img) -> tuple:
 IMX678_LUMA = (0.34, 0.48, 0.18)
 
 
-def colour_stretch(img, target_bg: float = 0.12, shadow_sigma: float = 2.8, protect: float = 0.6):
+def colour_stretch(img, target_bg: float = 0.12, shadow_sigma: float = 5.5, protect: float = 0.6):
     """Linear, colour-calibrated RGB -> stretched RGB that keeps the calibrated colour.
 
     Siril's unlinked auto-stretch stretches each channel on its own, which throws away SPCC's white balance (Siril's
@@ -221,6 +221,9 @@ def colour_stretch(img, target_bg: float = 0.12, shadow_sigma: float = 2.8, prot
     nebula, gentle on stars), and every pixel keeps its red:green:blue ratios. The stretch strength is solved so the
     sky lands at target_bg. Near the sky the colour is eased toward grey (protect), so background noise doesn't turn
     into colour speckle; stars and nebula keep their full colour.
+
+    shadow_sigma sets the black point that many sky-noise sigmas below the sky. Grain (sky noise / sky level) comes
+    out at about 1/shadow_sigma: 2.8 in 0.11-0.12.2 gave 0.42 on C 33 against 0.16 in the DWARF's own JPG.
     """
     np = _np()
     x = np.clip(np.asarray(img, dtype="float32"), 0, None)
@@ -274,7 +277,20 @@ def star_mask(img, size: int = 9):
     noise = 1.4826 * float(np.median(np.abs(lum - sky)))
     disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
     top = lum - cv2.morphologyEx(lum, cv2.MORPH_OPEN, disc)
-    core = (top > max(6 * noise, 0.06)).astype("uint8")
+    # A filament survives an opening with a short line along its own direction; a star survives none of them.
+    lines = []
+    for k in (np.eye(size, dtype="uint8"), np.fliplr(np.eye(size, dtype="uint8")),
+              np.ones((1, size), "uint8"), np.ones((size, 1), "uint8")):
+        lines.append(cv2.morphologyEx(lum, cv2.MORPH_OPEN, k))
+    point = lum - np.max(lines, axis=0)
+    core = ((top > max(6 * noise, 0.06)) & (point > 0.6 * top)).astype("uint8")
+    # Keep only compact, roundish blobs: thin nebula filaments also pass a top-hat, and they must keep their colour.
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(core, connectivity=8)
+    w, h, area = stats[:, cv2.CC_STAT_WIDTH], stats[:, cv2.CC_STAT_HEIGHT], stats[:, cv2.CC_STAT_AREA]
+    ok = (area <= 4 * size * size) & (np.maximum(w, h) <= 2.2 * np.maximum(1, np.minimum(w, h))) & \
+         (area >= 0.35 * w * h)
+    ok[0] = False
+    core = ok[labels].astype("uint8")
     core = cv2.dilate(core, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
     return np.clip(cv2.GaussianBlur(core.astype("float32"), (0, 0), 1.5) * 1.5, 0, 1)
 
@@ -285,11 +301,33 @@ def cap_star_colour(img, mask, cap: float = 0.25):
     np = _np()
     lum = img @ np.array(IMX678_LUMA, dtype="float32")
     chroma = img - lum[..., None]
+    core = mask > 0.9
+    if core.sum() > 50:
+        # Stars as a group should average white: remove their shared tint (C 33's leaned teal).
+        tint = np.median(chroma[core] / np.maximum(lum[core], 1e-6)[:, None], axis=0)
+        chroma = chroma - mask[..., None] * tint * lum[..., None]
     size = np.abs(chroma).max(axis=2)
     limit = cap * np.maximum(lum, 1e-6)
     shrink = np.minimum(1, limit / np.maximum(size, 1e-9))
     k = 1 - mask * (1 - shrink)
     return np.clip(lum[..., None] + chroma * k[..., None], 0, 1).astype("float32")
+
+
+def sky_smooth(img, stars=None, sigma: float = 1.2):
+    """A gentle brightness-only smoothing of the faint sky after the stretch: full strength at the sky level,
+    fading out by a few noise levels above it, never on stars. Nebula detail and stars stay sharp."""
+    import cv2
+    np = _np()
+    w = np.array(IMX678_LUMA, dtype="float32")
+    lum = (img @ w).astype("float32")
+    sky = float(np.median(lum))
+    noise = 1.4826 * float(np.median(np.abs(lum - sky)))
+    weight = np.clip(1 - (lum - sky) / max(1e-6, 4 * noise), 0, 1)
+    if stars is not None:
+        weight = weight * (1 - stars)
+    smooth = cv2.GaussianBlur(lum, (0, 0), sigma)
+    new = lum + weight * (smooth - lum)
+    return np.clip(img + (new - lum)[..., None], 0, 1).astype("float32")
 
 
 def saturation(img, amount: float = 0.35, protect_bg: bool = True, stars=None):
