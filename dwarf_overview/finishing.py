@@ -103,11 +103,17 @@ def reduce_stars(img, amount: float, starless=None):
 def hoo(img):
     """Duo-Band palette: Hα in red, OIII (the green and blue pixels) in green and blue, OIII lifted to match."""
     np = _np()
+    import cv2
     ha, o3 = img[..., 0], (img[..., 1] + img[..., 2]) / 2
-    bg_h, bg_o = np.median(ha), np.median(o3)
-    sig_h = np.percentile(ha, 99.5) - bg_h
-    sig_o = max(1e-4, np.percentile(o3, 99.5) - bg_o)
-    o3 = np.clip(bg_h + (o3 - bg_o) * min(3.0, max(1.0, sig_h / sig_o)), 0, 1)
+    bg_h, bg_o = _sky(ha), _sky(o3)
+
+    def nebula(c):  # star-free brightness: stars would otherwise set the balance (0.12.7 had OIII under Hα)
+        flat = cv2.medianBlur(cv2.medianBlur((np.clip(c, 0, 1) * 65535).astype("uint16"), 5), 5)
+        return float(np.percentile(flat.astype("float32") / 65535, 99))
+    sig_h = nebula(ha) - bg_h
+    sig_o = max(1e-4, nebula(o3) - bg_o)
+    # OIII a touch above Hα, as in the C 33 version people liked most.
+    o3 = np.clip(bg_h + (o3 - bg_o) * min(3.0, max(1.0, 1.1 * sig_h / sig_o)), 0, 1)
     return np.stack([ha, o3, o3], axis=-1)
 
 

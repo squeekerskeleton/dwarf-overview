@@ -1,6 +1,6 @@
 {
-  "version": "0.12.7",
-  "notes": "Brighter nebula, for real: the lift now aims at a measured nebula brightness (about 0.16 above the sky) and starts where the nebula actually is; the step note shows before and after.",
-  "sha256": "b07ba8cd7b09166dbed51b5e00a6b691af9ab36787835fcddb769f2d6d79d7cf",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.7.zip"
+  "version": "0.12.8",
+  "notes": "Nebula target raised to 0.18 above the sky; HOO balances OIII against H-alpha on the star-free nebula (OIII a touch brighter), so the teal matches the red.",
+  "sha256": "aaaa27b02575345be9421e3808f01dcc98b0c74e9b810f531260e894fc30bc52",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.8.zip"
 }
