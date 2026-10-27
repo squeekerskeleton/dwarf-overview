@@ -1036,6 +1036,15 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
     except Exception as e:
         j.log(f"Edge smoothing skipped ({e}).")
         edge_note = ""
+    extra = [edge_note] if edge_note else []
+    try:  # the lift above also lifts any leftover edge glow: even the final image's background
+        img, flat_note = finishing.flatten_display(img)
+        extra += [flat_note] if flat_note else []
+    except Exception as e:
+        j.log(f"Final background evening skipped ({e}).")
+    if rec["duo"]:
+        img, ha_note = finishing.keep_ha_red(img, stars)
+        extra += [ha_note] if ha_note else []
     finishing.write_fits_rgb(work / "result_stretched.fits", img, header)
     import tifffile
     import numpy as np
@@ -1047,7 +1056,7 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
                     f"nebula already {neb0:.3f} above the sky, not lifted; ")
                  + (f"sky grain {g0:.2f} smoothed to {g1:.2f} of the sky level" if g1 < g0 else
                     f"sky grain {g0:.2f} of the sky level, left as it is")
-                 + (f"; {edge_note}" if edge_note else ""))
+                 + "".join(f"; {e}" for e in extra))
     msg = "; ".join(notes)
     j.outputs["stretched"] = str(out)
     j.step(7, "done", msg[:1].upper() + msg[1:] + ".")
@@ -1093,6 +1102,10 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
         notes.append("stars left as they are: install StarNet++ (Setup links it) for star reduction")
     img, gate = finishing.quality_gate(img)
     notes += gate
+    blotch = finishing.sky_blotches(img)
+    if blotch > 0.004:
+        notes.append(f"warning: the sky shows colour blotches (green-magenta spread {blotch * 1000:.1f}/1000, "
+                     "visible above 4)")
     # The background fix shifts each channel, which can leave the stars a little tinted: balance them once more.
     img = finishing.cap_star_colour(img, finishing.star_mask(img), cap=0.15)
     out = {"linear": str(work / "result_linear.fits"), "folder": str(work), "frames": found["count"],

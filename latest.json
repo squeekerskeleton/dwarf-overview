@@ -1,6 +1,6 @@
 {
-  "version": "0.13.1",
-  "notes": "Background flattening now actually runs (it judged evenness against single-pixel noise and always skipped); natural-colour OIII made teal only where OIII dominates, so H\u03b1 stays red; rotation-corner smoothing measured after the stretch, where the extra noise shows.",
-  "sha256": "205f1899d9550bae9b5b758e798ecdaec2d95751d129a534e4774d51eb2564bf",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.13.1.zip"
+  "version": "0.13.2",
+  "notes": "Natural colour fixes, round 3: no more green sky blotches (teal only where OIII is clearly there), H\u03b1 kept red (the nebula lift scales signal, not the grey sky under it), edges and rotation corners actually flattened (finer edge pass, and again on the final image), and a check that warns about sky colour blotches.",
+  "sha256": "9cbf7c461ab175f36914433e63f330616519a85c2759130dbf8da4f319a0664f",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.13.2.zip"
 }
