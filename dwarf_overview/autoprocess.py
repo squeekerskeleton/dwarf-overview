@@ -1082,7 +1082,7 @@ def _layered(j: _Job, img, header, work: Path, out: Path, notes: list) -> Path |
     import numpy as np
     import tifffile
     try:
-        img, wedge, worst = finishing.even_linear(img)
+        img, wedge, worst, edge = finishing.even_linear(img)
         rgb = finishing.base_stretch(img, finishing.LAYERED["stretch"], finishing.LAYERED["black_sigma"],
                                      0.8 * finishing.LAYERED["sky_target"])
         base = work / "result_basestretch.tif"
@@ -1092,8 +1092,8 @@ def _layered(j: _Job, img, header, work: Path, out: Path, notes: list) -> Path |
         starless = finishing.read_tif(work / "result_sn.tif")
         if starless.shape != rgb.shape:
             raise OSError(f"StarNet's image is {starless.shape[1]}×{starless.shape[0]}, not {rgb.shape[1]}×{rgb.shape[0]}")
-        final, sl, stars, lnotes = finishing.layered_finish(rgb, starless)
-        hoo = finishing.layered_finish(rgb, starless, {"hoo": 1})[0]
+        final, sl, stars, lnotes = finishing.layered_finish(rgb, starless, edge=edge)
+        hoo = finishing.layered_finish(rgb, starless, {"hoo": 1}, edge=edge)[0]
     except (OSError, ValueError) as e:
         j.log(f"Layered finish skipped ({e}); using the standard stretch.")
         notes.append("the layered finish couldn't run, so the standard stretch was used")
@@ -1161,6 +1161,9 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
         notes.append("stars left as they are: install StarNet++ (Setup links it) for star reduction")
     img, gate = finishing.quality_gate(img)
     notes += gate
+    black = float((img.max(axis=2) <= 1e-5).mean())
+    if black > 0.00005:
+        notes.append(f"warning: {black * 100:.3f}% of the pixels are pure black (visible as dark specks above 0.005%)")
     blotch = finishing.sky_blotches(img)
     if blotch > 0.004:
         notes.append(f"warning: the sky shows colour blotches (green-magenta spread {blotch * 1000:.1f}/1000, "

@@ -1,6 +1,6 @@
 {
-  "version": "0.15.0",
-  "notes": "Layered finish for Duo-Band nebulae: StarNet separates the stars first, the nebula and sky are finished on the starless layer (frame-edge glow flattened, nebula lifted and denoised, smoother sky, brick-red H\u03b1, or a HOO palette), and tighter stars are screened back. On C 33 it beat the DWARF's own picture on contrast, flatness and neutral sky.",
-  "sha256": "9bd8d2b6ed1701551b1f966c10572e2fdc1ee376334d25cb37d75439b6267623",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.15.0.zip"
+  "version": "0.15.1",
+  "notes": "Layered finish: no more pure-black specks (a soft shadow toe), calmer colour speckle in the rotation edges, and a warning if a finished image has black specks.",
+  "sha256": "64f9b84a73685213f11ed6cf82c1a8639bf54e09a96761e6cb2eadcaafe2f3af",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.15.1.zip"
 }

@@ -886,7 +886,8 @@ def _mad(x) -> float:
 
 def even_linear(img) -> tuple:
     """Linear RGB: the edges that fewer frames covered after field rotation are noisier; blend them toward a
-    blurred copy just as far as their extra noise. Returns (image, share of the frame over 1.3x, worst ratio)."""
+    blurred copy just as far as their extra noise. Returns (image, share of the frame over 1.3x, worst ratio, the
+    per-pixel blend weight, which layered_finish uses to calm the colour speckle there too)."""
     import cv2
     np = _np()
     lum = img.mean(axis=2)
@@ -899,7 +900,7 @@ def even_linear(img) -> tuple:
     ratio = cv2.GaussianBlur(cv2.resize(nm / typ, (w, h), interpolation=cv2.INTER_LINEAR), (0, 0), 24)
     k = np.clip((ratio - 1.15) / 0.6, 0, 1)[..., None]  # none where normal, full where 1.75x noisier or more
     smooth = np.stack([cv2.GaussianBlur(img[..., c], (0, 0), 3.0) for c in range(3)], -1)
-    return (img * (1 - k) + smooth * k).astype("float32"), float((ratio > 1.3).mean()), float(ratio.max())
+    return (img * (1 - k) + smooth * k).astype("float32"), float((ratio > 1.3).mean()), float(ratio.max()), k[..., 0]
 
 
 def base_stretch(lin, stretch: float = 100.0, black_sigma: float = 2.5, sky: float = 0.068):
@@ -1015,9 +1016,24 @@ def edge_band(img, band: int = 300):
     return np.clip(out, 0, 1).astype("float32")
 
 
-def layered_finish(rgb, starless, p: dict | None = None) -> tuple:
+def shadow_toe(img, share: float = 0.25):
+    """Stretched RGB: below a quarter of the sky level, each channel bends smoothly toward 0 instead of clipping
+    to it (y' = t*exp((y - t)/t), so pure black becomes 0.37 t). Only the deepest noise pixels move; 0.15.0 left
+    4500 single black pixels on C 33, mostly in the noisy rotation edges."""
+    np = _np()
+    out = img.copy()
+    for c in range(3):
+        ch = img[..., c]
+        t = share * _sky(ch[::4, ::4])
+        if t > 1e-4:
+            out[..., c] = np.where(ch < t, t * np.exp((np.minimum(ch, t) - t) / t), ch)
+    return out.astype("float32")
+
+
+def layered_finish(rgb, starless, p: dict | None = None, edge=None) -> tuple:
     """Finish the nebula and sky on the starless layer, then screen the stars back. rgb is base_stretch's output
-    and starless StarNet's version of it. Returns (final, finished starless, finished stars, notes)."""
+    and starless StarNet's version of it; edge is even_linear's weight for the noisier rotation edges, whose
+    colour speckle is smoothed. Returns (final, finished starless, finished stars, notes)."""
     import cv2
     np = _np()
     p = {**LAYERED, **(p or {})}
@@ -1026,6 +1042,12 @@ def layered_finish(rgb, starless, p: dict | None = None) -> tuple:
     mask = starless_subject(starless)
     notes.append(f"subject {mask.mean() * 100:.0f}% of the frame (border glow left out)")
     sl = flatten_tiles(starless, mask)
+    if edge is not None and edge.shape == sl.shape[:2] and edge.max() > 0:
+        lum = sl.mean(axis=2, keepdims=True)
+        chroma = sl - lum
+        soft = np.stack([cv2.GaussianBlur(chroma[..., c], (0, 0), 3.0) for c in range(3)], -1)
+        k = np.clip(cv2.GaussianBlur(edge.astype("float32"), (0, 0), 8) / 0.3, 0, 1)[..., None]
+        sl = np.clip(lum + chroma + k * (soft - chroma), 0, 1).astype("float32")
     # Nebula curve towards a measured brightness above the sky, ramped in from the noise.
     lum = sl.mean(axis=2)
     ssky = _sky(lum[::4, ::4])
@@ -1091,6 +1113,6 @@ def layered_finish(rgb, starless, p: dict | None = None) -> tuple:
     # The sky at the target, neutral, and no glow along the outermost lines.
     final = np.clip(final - _sky(final.mean(axis=2)[::4, ::4]) + p["sky_target"], 0, 1)
     fs = np.array([_sky(final[..., c][::4, ::4]) for c in range(3)])
-    final = edge_band(np.clip(final - fs + fs.mean(), 0, 1).astype("float32"))
-    sl = np.clip(sl - _sky(sl.mean(axis=2)[::4, ::4]) + p["sky_target"], 0, 1)
+    final = shadow_toe(edge_band(np.clip(final - fs + fs.mean(), 0, 1).astype("float32")))
+    sl = shadow_toe(np.clip(sl - _sky(sl.mean(axis=2)[::4, ::4]) + p["sky_target"], 0, 1))
     return final.astype("float32"), sl.astype("float32"), stars.astype("float32"), notes
