@@ -455,199 +455,253 @@ def saturation(img, amount: float = 0.35, protect_bg: bool = True, stars=None):
     return np.clip(out, 0, 1).astype("float32")
 
 
-def _subject_mask(lum, sky: float, dilate_px: int = 40):
-    """Linear brightness -> True where the subject (nebula, galaxy) or a star is, so a background model or a
-    coverage fix keeps off it: a heavily blurred copy more than a couple of its own noise levels above the sky,
-    grown by dilate_px so the faint outer glow is left out too."""
-    import cv2
+def _robust_mad(v) -> float:
     np = _np()
-    soft = cv2.GaussianBlur(lum.astype("float32"), (0, 0), 6)
-    low = soft[soft <= np.percentile(soft, 50)]
-    noise = max(1e-9, 1.4826 * float(np.median(np.abs(low - np.median(low)))))
-    subject = (soft > sky + 2.5 * noise).astype("uint8")
-    subject = _drop_rotation_wedges(lum, subject)
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * dilate_px + 1, 2 * dilate_px + 1))
-    subject = cv2.dilate(subject, k)
+    return 1.4826 * float(np.median(np.abs(v - np.median(v)))) if v.size else 0.0
+
+
+def _sky_level(a) -> tuple:
+    """Sky level and noise of an image whose bright part (subject, stars) may cover up to half of it: read off
+    the 12.5th and 25th percentiles, which only the sky reaches (for Gaussian noise they sit 1.15σ and 0.674σ
+    below the mean). Returns (level, noise)."""
+    np = _np()
+    v = a.reshape(-1)[:: max(1, a.size // 500_000)]
+    p12, p25 = np.percentile(v, [12.5, 25])
+    sigma = max(1e-12, float(p25 - p12) / 0.476)
+    return float(p25) + 0.674 * sigma, sigma
+
+
+def _stars_linear(lum):
+    """Star mask for linear data (found on a quick asinh preview)."""
+    np = _np()
     peak = max(1e-9, float(np.percentile(lum, 99.9)))
     preview = np.arcsinh(np.clip(lum / peak, 0, None) * 200) / np.arcsinh(200)
-    stars = star_mask(np.repeat(preview[..., None], 3, axis=2)) > 0.1
-    return subject.astype(bool) | stars
+    return star_mask(np.repeat(preview[..., None], 3, axis=2)) > 0.1
 
 
-def _drop_rotation_wedges(lum, subject):
-    """A patch at the frame's edge that's brighter than the sky because fewer frames cover it (field rotation)
-    looks like nebulosity to a brightness test. Such a patch touches the border and is noisier than the open sky
-    (fewer frames, more noise); a real nebula isn't. Those patches are taken out of the subject mask, so the
-    background model and the coverage smoothing can fix them."""
+def _tile_grid(chan, mask, rows: int, cols: int):
+    """Each tile's sky: the median of the darker half of its unmasked pixels (a nebula edge or a missed faint
+    star pulls a plain median up; the darker half barely moves, and its constant offset cancels out)."""
+    np = _np()
+    h, w = chan.shape
+    th, tw = h // rows, w // cols
+    grid = np.full((rows, cols), np.nan, dtype="float32")
+    for r in range(rows):
+        for c in range(cols):
+            m = mask[r * th:(r + 1) * th, c * tw:(c + 1) * tw]
+            if (~m).mean() > 0.3:
+                v = chan[r * th:(r + 1) * th, c * tw:(c + 1) * tw][~m]
+                grid[r, c] = float(np.median(v[v <= np.median(v)]))
+    return grid
+
+
+def _fill_grid(grid):
+    """Tiles covered by the subject take the average of their filled neighbours, ring by ring."""
+    import warnings
+    np = _np()
+    rows, cols = grid.shape
+    if np.isnan(grid).all():
+        return None
+    for _ in range(rows + cols):
+        gaps = np.isnan(grid)
+        if not gaps.any():
+            break
+        padded = np.pad(grid, 1, constant_values=np.nan)
+        near = np.stack([padded[1 + dy:1 + dy + rows, 1 + dx:1 + dx + cols]
+                         for dy in (-1, 0, 1) for dx in (-1, 0, 1) if dy or dx])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            fill = np.nanmean(near, axis=0)
+        grid = np.where(gaps & ~np.isnan(fill), fill, grid)
+    return np.nan_to_num(grid, nan=float(np.nanmedian(grid)))
+
+
+def _background(img, cols: int = 16, rounds: int = 3):
+    """Model the background left after GraXpert, channel by channel, from sky-only tiles. The subject is found
+    against the model itself and the model refitted without it, a few times over, so a smooth ramp across the
+    frame (which a plain brightness test would take for nebula) is modelled, and the nebula's faint glow isn't.
+    Returns (models, subject mask, star mask, rows, cols)."""
     import cv2
     np = _np()
+    lum = img @ np.array(IMX678_LUMA, dtype="float32")
+    h, w = lum.shape
+    cols = max(3, min(cols, w // 240))  # tiles of at least 240 px, so a nebula's glow isn't modelled as sky
+    rows = max(2, round(cols * h / w))
+    th, tw = h // rows, w // cols
+    stars = cv2.dilate(_stars_linear(lum).astype("uint8"), np.ones((5, 5), "uint8")).astype(bool)
+    subject = np.zeros_like(stars)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (81, 81))
+    pixel_noise = max(1e-12, _noise(lum))
     hp = lum - cv2.GaussianBlur(lum, (0, 0), 2)
+    models = None
+    for _ in range(rounds):
+        mask = stars | subject
+        new = []
+        for ch in range(3):
+            grid = _fill_grid(_tile_grid(img[..., ch], mask, rows, cols))
+            if grid is None:
+                break
+            # Smooth surface through the tile levels, built at an eighth of the size (a 120 px blur on the full
+            # frame took over a second per channel), then scaled up.
+            small = cv2.resize(grid, (max(2, w // 8), max(2, h // 8)), interpolation=cv2.INTER_CUBIC)
+            small = cv2.GaussianBlur(small, (0, 0), max(th, tw) / 16)
+            new.append(cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR))
+        if len(new) < 3:
+            break  # too much of the frame masked: keep the last good model
+        models = new
+        lum_model = np.stack(models, axis=-1) @ np.array(IMX678_LUMA, dtype="float32")
+        resid = cv2.GaussianBlur(lum - lum_model, (0, 0), 6)
+        # The subject is what stands clearly above the model: a quarter of a pixel's noise on this smoothed
+        # residual (well above its own noise, and above the model's small tile-scale ripples), raised if that
+        # would cover most of the frame.
+        level = max(3 * _robust_mad(resid[~mask]), 0.25 * pixel_noise)
+        speck = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        for _ in range(8):
+            found = cv2.morphologyEx((resid > level).astype("uint8"), cv2.MORPH_OPEN, speck)
+            n, labels, stats, _ = cv2.connectedComponentsWithStats(found, connectivity=8)
+            keep = stats[:, cv2.CC_STAT_AREA] >= 1500  # noise specks and leftover star haloes are smaller
+            keep[0] = False
+            found = keep[labels].astype("uint8")
+            found = _drop_rotation_wedges(lum, found, hp)
+            grown = cv2.dilate(found, k)
+            if grown.mean() < 0.5:
+                break
+            level *= 1.4
+        subject = grown.astype(bool)
+    return models, subject, stars, rows, cols
+
+
+def _drop_rotation_wedges(lum, subject, hp=None):
+    """A patch at the frame's edge that's brighter than the sky because fewer frames cover it (field rotation)
+    looks like nebulosity to a brightness test. Such a patch touches the border and is noisier than the open sky
+    (fewer frames, more noise); a real nebula isn't. Those patches are taken out of the subject mask."""
+    import cv2
+    np = _np()
+    if hp is None:
+        hp = lum - cv2.GaussianBlur(lum, (0, 0), 2)
     clear = subject == 0
     if clear.sum() < 1000:
         return subject
-    base = 1.4826 * float(np.median(np.abs(hp[clear] - np.median(hp[clear]))))
+    base = _robust_mad(hp[clear])
     n, labels, stats, _ = cv2.connectedComponentsWithStats(subject, connectivity=8)
     h, w = subject.shape
     for i in range(1, n):
         x, y, bw, bh, area = stats[i]
-        if not (x == 0 or y == 0 or x + bw >= w or y + bh >= h):
+        if not (x == 0 or y == 0 or x + bw >= w or y + bh >= h) or area > 0.25 * h * w:
             continue
-        if area > 0.25 * h * w:
-            continue
-        v = hp[labels == i]
-        noise = 1.4826 * float(np.median(np.abs(v - np.median(v))))
-        if noise > 1.2 * base:
+        if _robust_mad(hp[labels == i]) > 1.2 * base:
             subject[labels == i] = 0
     return subject
 
 
-def _tile_spread(lum, mask, sky: float, noise: float, cols: int = 16) -> float:
-    """Background evenness: the range of sky-only tile medians, in sky-noise units (the C 33 natural from 0.12.11
-    spanned about 6: +4 on the left edge and in the rotation corner, -2 in the moat under the Veil)."""
+def _spread(lum, mask, rows: int, cols: int, noise: float) -> float:
+    """Background evenness: the range of the sky-only tile levels, in units of the noise of one tile's level
+    (pixel noise ÷ √pixels). C 33's 0.12.11 natural ranged about +4 to -2 on a stretched, smoothed image; on
+    linear data the same unevenness is far below one pixel's noise, so it has to be judged per tile."""
     np = _np()
+    grid = _tile_grid(lum, mask, rows, cols)
+    vals = grid[~np.isnan(grid)]
+    if vals.size < 3:
+        return 0.0
     h, w = lum.shape
-    rows = max(1, round(cols * h / w))
-    th, tw = h // rows, w // cols
-    meds = []
-    for r in range(rows):
-        for c in range(cols):
-            t, m = lum[r * th:(r + 1) * th, c * tw:(c + 1) * tw], mask[r * th:(r + 1) * th, c * tw:(c + 1) * tw]
-            if (~m).mean() > 0.3:
-                meds.append(float(np.median(t[~m])))
-    return (max(meds) - min(meds)) / max(noise, 1e-9) if len(meds) > 2 else 0.0
+    per_tile = max(1.0, (h // rows) * (w // cols) * float((~mask).mean()) / 2)
+    return float((vals.max() - vals.min()) / max(1e-12, noise / per_tile ** 0.5))
 
 
-def flatten(src: Path, dst: Path, cols: int = 16) -> dict:
-    """Linear RGB after background extraction and colour calibration: model what's left of the background from
-    sky-only tiles (stars and the subject masked and grown) and subtract it, channel by channel, keeping each
-    channel's mean. This catches what GraXpert leaves: a ramp across the frame, a dark moat where it took the
-    nebula's glow for sky, and the brighter, redder corners that fewer frames cover after field rotation."""
-    import cv2
+def flatten(src: Path, dst: Path, cols: int = 16, oiii: bool = False) -> dict:
+    """Linear RGB after background extraction and colour calibration: subtract what's left of the background
+    (a ramp, a dark moat where GraXpert took the nebula's glow for sky, the brighter, redder corners that fewer
+    frames cover after field rotation), channel by channel, keeping each channel's mean. With oiii (Duo-Band),
+    also give OIII its teal in natural colour (see _teal_oiii). Returns {"note", "before", "after", "colour"}."""
     np = _np()
     img, header = read_fits_rgb(src)
-    lum = img @ np.array(IMX678_LUMA, dtype="float32")
-    sky = _sky(lum)
-    noise = max(1e-9, _noise(lum))  # pixel noise of the sky, so the spread reads in "noise levels"
-    mask = _subject_mask(lum, sky)
-    h, w = lum.shape
-    rows = max(1, round(cols * h / w))
-    th, tw = h // rows, w // cols
-    before = _tile_spread(lum, mask, sky, noise, cols)
-    if before <= 1.5:  # already even: nothing worth changing
-        write_fits_rgb(dst, img, header)
-        return {"note": "", "before": before, "after": before}
+    w = np.array(IMX678_LUMA, dtype="float32")
+    lum = img @ w
+    models, subject, stars, rows, cols = _background(img, cols)
+    mask = subject | stars
+    noise = max(1e-12, _noise(lum))
+    before = _spread(lum, mask, rows, cols, noise)
+    out, note, after = img, "", before
+    if models is not None:
+        flat = np.clip(np.stack([img[..., c] - (models[c] - float(models[c].mean())) for c in range(3)], axis=-1), 0, None)
+        after = _spread(flat @ w, mask, rows, cols, noise)
+        if after < before:
+            out = flat
+            note = (f"background flattened: its unevenness across the sky cut by {(1 - after / before) * 100:.0f}% "
+                    f"(stars and the subject, {subject.mean() * 100:.0f}% of the frame, left out of the model)")
+        else:
+            after = before
+            note = "background left as it was (flattening wouldn't have made it more even)"
+    colour = ""
+    if oiii:
+        out, colour = _teal_oiii(out, subject & ~stars)
+    write_fits_rgb(dst, out.astype("float32"), header)
+    return {"note": note, "before": before, "after": after, "colour": colour}
+
+
+def _teal_oiii(img, nebula):
+    """Duo-Band natural colour. Through the dual-band filter the red pixels see Hα and the blue ones OIII; the
+    green ones see OIII too but came out about 20% under blue after narrowband SPCC, so OIII read blue and the
+    Veil purple. Scaling all green (0.13.0, ×1.40) turned OIII green and Hα orange. Here green is moved toward
+    the blue channel's signal only where OIII dominates (weight B ÷ (R + B) above the sky), inside the nebula and
+    off the stars: OIII becomes teal (green ≈ blue) and Hα stays red."""
+    import cv2
+    np = _np()
+    sky = [_sky_level(img[..., c])[0] for c in range(3)]
+    sig = [np.clip(cv2.GaussianBlur(img[..., c], (0, 0), 2) - sky[c], 0, None) for c in range(3)]
+    weight = np.clip(1.2 * sig[2] / np.maximum(sig[0] + sig[2], 1e-12), 0, 1)
+    weight = np.where(sig[0] + sig[2] > 0, weight, 0) * cv2.GaussianBlur(nebula.astype("float32"), (0, 0), 8)
+    if float(weight.max()) < 0.05:
+        return img, ""
+    target = sky[1] + (img[..., 2] - sky[2])
     out = img.copy()
-    for ch in range(3):
-        grid = np.full((rows, cols), np.nan, dtype="float32")
-        for r in range(rows):
-            for c in range(cols):
-                t = img[r * th:(r + 1) * th, c * tw:(c + 1) * tw, ch]
-                m = mask[r * th:(r + 1) * th, c * tw:(c + 1) * tw]
-                if (~m).mean() > 0.3:
-                    v = t[~m]
-                    med = np.median(v)
-                    mad = 1.4826 * np.median(np.abs(v - med)) + 1e-9
-                    grid[r, c] = float(np.median(v[np.abs(v - med) < 3 * mad]))
-        if np.isnan(grid).all():
-            return {"note": "", "before": before, "after": before}
-        # Tiles covered by the subject take the average of their sky neighbours (repeated until all are filled).
-        for _ in range(rows + cols):
-            gaps = np.isnan(grid)
-            if not gaps.any():
-                break
-            padded = np.pad(grid, 1, constant_values=np.nan)
-            near = np.stack([padded[1 + dy:1 + dy + rows, 1 + dx:1 + dx + cols]
-                             for dy in (-1, 0, 1) for dx in (-1, 0, 1) if dy or dx])
-            with np.errstate(all="ignore"), __import__("warnings").catch_warnings():
-                __import__("warnings").simplefilter("ignore", RuntimeWarning)
-                fill = np.nanmean(near, axis=0)
-            grid = np.where(gaps & ~np.isnan(fill), fill, grid)
-        grid = np.nan_to_num(grid, nan=float(np.nanmedian(grid)))
-        model = cv2.resize(grid, (w, h), interpolation=cv2.INTER_CUBIC)
-        model = cv2.GaussianBlur(model, (0, 0), max(th, tw) / 2)
-        out[..., ch] = img[..., ch] - (model - float(model.mean()))
+    out[..., 1] = img[..., 1] + weight * (target - img[..., 1])
     out = np.clip(out, 0, None)
-    lum2 = out @ np.array(IMX678_LUMA, dtype="float32")
-    after = _tile_spread(lum2, mask, _sky(lum2), noise, cols)
-    if after >= before:  # never make it worse
-        write_fits_rgb(dst, img, header)
-        return {"note": f"background already even ({before:.1f} noise levels across the sky)", "before": before, "after": before}
-    write_fits_rgb(dst, out, header)
-    return {"note": f"background flattened from {before:.1f} to {after:.1f} noise levels across the sky (stars and "
-                    "subject left out of the model)", "before": before, "after": after}
+    # Check: where OIII dominates, green ≈ blue; where Hα dominates, the hue stays red.
+    o_dom = (weight > 0.5) & nebula
+    h_dom = (sig[0] > 2 * sig[2]) & nebula
+    o_ratio = float(np.sum(out[..., 1][o_dom] - sky[1]) / max(1e-12, np.sum(out[..., 2][o_dom] - sky[2]))) if o_dom.any() else 1.0
+    h_ratio = float(np.sum(out[..., 1][h_dom] - sky[1]) / max(1e-12, np.sum(out[..., 0][h_dom] - sky[0]))) if h_dom.any() else 0.0
+    return out, (f"OIII made teal for natural colour (green follows blue where OIII dominates: green/blue there "
+                 f"{o_ratio:.2f}; Hα stays red: green/red on Hα {h_ratio:.2f})")
 
 
-def balance_oiii(src: Path, dst: Path) -> str:
-    """Duo-Band, natural colour: OIII (500.7 nm) lands in both the green and the blue pixels, so it should read
-    teal (green ≈ blue). After narrowband SPCC the C 33 nebula's green came out about 20% under its blue, so OIII
-    looked blue and the Veil purple. Scale green about the sky so the nebula's green signal matches its blue."""
-    np = _np()
-    img, header = read_fits_rgb(src)
-    lum = img @ np.array(IMX678_LUMA, dtype="float32")
-    sky = [_sky(img[..., c]) for c in range(3)]
-    import cv2
-    soft = cv2.GaussianBlur(lum, (0, 0), 3)
-    low = soft[soft <= np.percentile(soft, 50)]
-    soft_noise = max(1e-9, 1.4826 * float(np.median(np.abs(low - np.median(low)))))
-    peak = max(1e-9, float(np.percentile(lum, 99.9)))
-    preview = np.arcsinh(np.clip(lum / peak, 0, None) * 200) / np.arcsinh(200)
-    stars = star_mask(np.repeat(preview[..., None], 3, axis=2)) > 0.05
-    # The nebula proper (well above the sky), without stars; its faint fringe would mostly measure noise.
-    neb = (_drop_rotation_wedges(lum, (soft > _sky(lum) + 6 * soft_noise).astype("uint8")) > 0) & ~stars
-    if neb.sum() < 2000:
-        write_fits_rgb(dst, img, header)
-        return ""
-    g = float(np.sum(img[..., 1][neb] - sky[1]))
-    b = float(np.sum(img[..., 2][neb] - sky[2]))
-    if g <= 0 or b <= 0:
-        write_fits_rgb(dst, img, header)
-        return ""
-    scale = min(1.4, max(0.8, b / g))
-    if abs(scale - 1) < 0.03:
-        write_fits_rgb(dst, img, header)
-        return ""
-    out = img.copy()
-    out[..., 1] = sky[1] + (img[..., 1] - sky[1]) * scale
-    write_fits_rgb(dst, np.clip(out, 0, None), header)
-    return f"OIII balanced to teal for natural colour (green ×{scale:.2f} on the signal, the sky unchanged)"
-
-
-def coverage_denoise(src: Path, dst: Path, tile: int = 96) -> str:
-    """Field rotation leaves the frame's edges and corners with fewer frames, so they're noisier (C 33's bottom-
-    left corner: about 1.5× the centre). Map the noise in tiles across the sky and smooth the brightness more
-    where it's higher than the frame's typical noise, never on stars or the subject."""
+def even_noise(img, stars=None, tile: int = 96) -> tuple:
+    """Stretched RGB: field rotation leaves the frame's edges and corners with fewer frames, so they're noisier
+    (C 33's bottom-left corner: 1.5× the centre). Map the noise in tiles across the sky and smooth brightness
+    just enough where a tile is over 1.2× the typical noise to bring it back, never on stars or the subject.
+    Returns (image, note)."""
     import cv2
     np = _np()
-    img, header = read_fits_rgb(src)
-    lum = img @ np.array(IMX678_LUMA, dtype="float32")
-    mask = _subject_mask(lum, _sky(lum), dilate_px=10)
+    lum = (img @ np.array(IMX678_LUMA, dtype="float32")).astype("float32")
+    soft = cv2.GaussianBlur(lum, (0, 0), 6)
+    soft_sky, soft_noise = _sky_level(soft)
+    subject = (soft > soft_sky + 4 * soft_noise).astype("uint8")
+    subject = _drop_rotation_wedges(lum, subject)
+    subject = cv2.dilate(subject, np.ones((21, 21), "uint8")).astype(bool)
+    mask = subject | ((stars > 0.1) if stars is not None else False)
     hp = lum - cv2.GaussianBlur(lum, (0, 0), 2)
     h, w = lum.shape
     rows, cols = max(1, h // tile), max(1, w // tile)
     grid = np.full((rows, cols), np.nan, dtype="float32")
     for r in range(rows):
         for c in range(cols):
-            t = hp[r * tile:(r + 1) * tile, c * tile:(c + 1) * tile]
             m = mask[r * tile:(r + 1) * tile, c * tile:(c + 1) * tile]
             if (~m).mean() > 0.5:
-                v = t[~m]
-                grid[r, c] = 1.4826 * float(np.median(np.abs(v - np.median(v))))
+                grid[r, c] = _robust_mad(hp[r * tile:(r + 1) * tile, c * tile:(c + 1) * tile][~m])
     if np.isnan(grid).all():
-        write_fits_rgb(dst, img, header)
-        return ""
-    typical = float(np.nanmedian(grid))
-    ratio = np.nan_to_num(grid / max(typical, 1e-12), nan=1.0)
+        return img, ""
+    ratio = np.nan_to_num(grid / max(float(np.nanmedian(grid)), 1e-12), nan=1.0)
     worst = float(ratio.max())
     if worst < 1.2:
-        write_fits_rgb(dst, img, header)
-        return ""
-    # Just enough smoothing to bring each tile back to the typical noise (a 1.6 px blur keeps about a fifth of
-    # it); more would leave plasticky patches.
-    weight = np.where(ratio > 1.1, np.clip((1 - 1 / np.maximum(ratio, 1e-6)) / 0.8, 0, 1), 0).astype("float32")
-    weight = cv2.GaussianBlur(cv2.resize(weight, (w, h), interpolation=cv2.INTER_LINEAR), (0, 0), tile / 2)
-    weight = weight * (~mask)
-    soft = cv2.GaussianBlur(lum, (0, 0), 1.6)
-    out = img + (weight * (soft - lum))[..., None]
-    write_fits_rgb(dst, np.clip(out, 0, None), header)
+        return img, ""
+    # A 1.6 px blur keeps about a fifth of the pixel noise; mix in just enough of it to reach the typical noise.
+    weight = np.where(ratio > 1.15, np.clip((1 - 1 / np.maximum(ratio, 1e-6)) / 0.8, 0, 1), 0).astype("float32")
+    weight = cv2.resize(weight, (cols * tile, rows * tile), interpolation=cv2.INTER_NEAREST)
+    weight = cv2.copyMakeBorder(weight, 0, h - rows * tile, 0, w - cols * tile, cv2.BORDER_REPLICATE)
+    weight = cv2.GaussianBlur(weight, (0, 0), tile / 2) * (~mask)
+    new = lum + weight * (cv2.GaussianBlur(lum, (0, 0), 1.6) - lum)
+    out = np.clip(img + (new - lum)[..., None], 0, 1).astype("float32")
     share = float((weight > 0.2).mean() * 100)
-    return f"the {share:.0f}% of the frame that fewer frames cover (edges after field rotation, up to {worst:.1f}× noisier) smoothed more"
+    return out, (f"edges that fewer frames cover (field rotation; {share:.0f}% of the frame, up to {worst:.1f}× "
+                 "noisier) smoothed to match the rest")

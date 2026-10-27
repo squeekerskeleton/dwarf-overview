@@ -1,6 +1,6 @@
 {
-  "version": "0.13.0",
-  "notes": "Flat backgrounds and truer colour: sky-only background flattening after colour calibration (removes ramps, the dark moat around a nebula and bright rotation corners), GraXpert smoothing 0.4 for nebulae, OIII balanced to teal in Duo-Band natural colour, and extra smoothing only where fewer frames cover the edges.",
-  "sha256": "70e8828376abe3afc4890c7d03446049dd5c03e2a842c8b53f2c2c70317e29e3",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.13.0.zip"
+  "version": "0.13.1",
+  "notes": "Background flattening now actually runs (it judged evenness against single-pixel noise and always skipped); natural-colour OIII made teal only where OIII dominates, so H\u03b1 stays red; rotation-corner smoothing measured after the stretch, where the extra noise shows.",
+  "sha256": "205f1899d9550bae9b5b758e798ecdaec2d95751d129a534e4774d51eb2564bf",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.13.1.zip"
 }

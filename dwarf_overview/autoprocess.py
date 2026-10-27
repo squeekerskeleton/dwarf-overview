@@ -921,14 +921,9 @@ def _flatten(j: _Job, current: Path, work: Path, rec: dict) -> Path:
     notes, out = [], current
     try:
         flat = work / "result_flat.fits"
-        res = finishing.flatten(current, flat)
+        res = finishing.flatten(current, flat, oiii=bool(rec.get("duo")))
         out = flat
-        if res["note"]:
-            notes.append(res["note"])
-        if rec.get("duo"):
-            note = finishing.balance_oiii(flat, flat)
-            if note:
-                notes.append(note)
+        notes += [n for n in (res["note"], res["colour"]) if n]
     except Exception as e:
         j.log(f"Background flattening skipped ({e}).")
         return current
@@ -959,12 +954,6 @@ def _denoise(j: _Job, exe: str | None, current: Path, work: Path, tune: list[str
     finishing.chroma_denoise(src, final, sigma)
     note = (note + "; " if note else "") + (f"colour noise smoothed (σ {sigma})" +
                                              (", stronger for Duo-Band, where only the red pixels see Hα" if rec["duo"] else ""))
-    try:
-        cover = finishing.coverage_denoise(final, final)
-        if cover:
-            note += "; " + cover
-    except Exception as e:  # a nicety; the run goes on without it
-        j.log(f"Edge smoothing skipped ({e}).")
     j.outputs["denoised"] = str(final)
     j.step(6, "done", note[:1].upper() + note[1:] + ".")
     return final
@@ -1042,6 +1031,11 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
     # Smooth the sky only as far as a natural grain (about 0.18 of the sky level): 0.12.3 smoothed C 33 to 0.05,
     # which looked plasticky.
     img, g0, g1 = finishing.smooth_to_grain(img, stars, 0.18)
+    try:  # rotation corners are noisier than the rest; measured here, after the stretch, where it shows
+        img, edge_note = finishing.even_noise(img, stars)
+    except Exception as e:
+        j.log(f"Edge smoothing skipped ({e}).")
+        edge_note = ""
     finishing.write_fits_rgb(work / "result_stretched.fits", img, header)
     import tifffile
     import numpy as np
@@ -1052,7 +1046,8 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
                  + (f"faint nebula lifted ×{lift:.2f}, from {neb0:.3f} to {neb1:.3f} above the sky; " if lift > 1 else
                     f"nebula already {neb0:.3f} above the sky, not lifted; ")
                  + (f"sky grain {g0:.2f} smoothed to {g1:.2f} of the sky level" if g1 < g0 else
-                    f"sky grain {g0:.2f} of the sky level, left as it is"))
+                    f"sky grain {g0:.2f} of the sky level, left as it is")
+                 + (f"; {edge_note}" if edge_note else ""))
     msg = "; ".join(notes)
     j.outputs["stretched"] = str(out)
     j.step(7, "done", msg[:1].upper() + msg[1:] + ".")
