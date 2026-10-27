@@ -1,6 +1,6 @@
 {
-  "version": "0.12.5",
-  "notes": "Brighter nebula: stronger faint-nebula lift (sky and stars untouched); star colour capped tighter so stars read white.",
-  "sha256": "65a25acdd945fe28caf277c4ab4f9d6810e79396126944c7db9edbb43897945c",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.5.zip"
+  "version": "0.12.6",
+  "notes": "Nebula brightness fixed: sky and noise are now measured on the real sky, not the nebula, so the nebula lift and saturation actually reach the filaments; stars re-balanced to white after the background fix.",
+  "sha256": "5cfa5476c31cc8bf9f9c2636dcb8fba4d785d24f3877591b7ba78b5dd195c1f3",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.6.zip"
 }

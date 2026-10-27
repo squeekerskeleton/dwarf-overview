@@ -136,6 +136,12 @@ def _sky(c):
     return float(np.median(lo)) if lo.size else float(np.median(c))
 
 
+def _sky_noise(lum) -> tuple:
+    """Sky level and pixel noise of a brightness image. A plain median and MAD count a big nebula as sky and as
+    noise (C 33 fills much of the frame), which kept 0.12.4-0.12.5's faint-nebula lift from doing anything."""
+    return _sky(lum), max(1e-6, _noise(lum))
+
+
 def neutralise(src: Path, dst: Path) -> str:
     """Linear data: shift each channel so their sky levels match (a neutral grey background)."""
     np = _np()
@@ -274,8 +280,7 @@ def star_mask(img, size: int = 9):
     import cv2
     np = _np()
     lum = (img @ np.array(IMX678_LUMA, dtype="float32")).astype("float32")
-    sky = float(np.median(lum))
-    noise = 1.4826 * float(np.median(np.abs(lum - sky)))
+    sky, noise = _sky_noise(lum)
     disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
     top = lum - cv2.morphologyEx(lum, cv2.MORPH_OPEN, disc)
     # A filament survives an opening with a short line along its own direction; a star survives none of them.
@@ -321,8 +326,7 @@ def sky_smooth(img, stars=None, sigma: float = 1.2, amount: float = 1.0):
     np = _np()
     w = np.array(IMX678_LUMA, dtype="float32")
     lum = (img @ w).astype("float32")
-    sky = float(np.median(lum))
-    noise = 1.4826 * float(np.median(np.abs(lum - sky)))
+    sky, noise = _sky_noise(lum)
     weight = amount * np.clip(1 - (lum - sky) / max(1e-6, 4 * noise), 0, 1)
     if stars is not None:
         weight = weight * (1 - stars)
@@ -362,17 +366,16 @@ def smooth_to_grain(img, stars=None, target: float = 0.18):
 
 def lift_faint(img, stars=None, gain: float = 1.6):
     """Contrast for the faint nebula without lifting the sky's noise: brightness a few noise levels above the sky
-    is pushed up (slope `gain` just above the sky, easing to none at white), the sky itself and the stars untouched.
+    is pushed up (from 3 noise levels above the sky, slope `gain`, easing to none at white), the sky itself and the stars untouched.
     Colour ratios are kept. 0.12.3's gentle stretch left C 33's filaments 40-60% dimmer than 0.11.1."""
     np = _np()
     w = np.array(IMX678_LUMA, dtype="float32")
     lum = (img @ w).astype("float32")
-    sky = float(np.median(lum))
-    noise = 1.4826 * float(np.median(np.abs(lum - sky)))
+    sky, noise = _sky_noise(lum)
     t = np.clip(lum - sky, 0, None)
     span = max(1e-6, 1 - sky)
     curved = sky + t * gain / (1 + (gain - 1) * t / span)
-    ramp = np.clip((lum - sky - 2 * noise) / max(1e-6, 4 * noise), 0, 1)
+    ramp = np.clip((lum - sky - 3 * noise) / max(1e-6, 5 * noise), 0, 1)
     if stars is not None:
         ramp = ramp * (1 - stars)
     new = np.where(lum > sky, lum + ramp * (curved - lum), lum)
@@ -390,8 +393,7 @@ def saturation(img, amount: float = 0.35, protect_bg: bool = True, stars=None):
     lum = img @ np.array(IMX678_LUMA, dtype="float32")
     gain = np.ones(lum.shape, dtype="float32") * amount
     if protect_bg:
-        sky = float(np.median(lum))
-        noise = 1.4826 * float(np.median(np.abs(lum - sky)))
+        sky, noise = _sky_noise(lum)
         gain = gain * np.clip((lum - sky - noise) / max(1e-6, 3 * noise), 0, 1)
     if stars is not None:
         gain = gain * (1 - stars)

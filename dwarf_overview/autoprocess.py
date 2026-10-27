@@ -1002,7 +1002,7 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
     img, info = finishing.colour_stretch(img, target_bg=target)
     stars = finishing.star_mask(img)
     img = finishing.cap_star_colour(finishing.saturation(img, 0.35, stars=stars), stars, cap=0.15)
-    img = finishing.lift_faint(img, stars, gain=2.4)  # 1.6 in 0.12.4 left C 33's filaments 26-47% under 0.11.1
+    img = finishing.lift_faint(img, stars, gain=1.8)
     # Smooth the sky only as far as a natural grain (about 0.18 of the sky level): 0.12.3 smoothed C 33 to 0.05,
     # which looked plasticky.
     img, g0, g1 = finishing.smooth_to_grain(img, stars, 0.18)
@@ -1052,11 +1052,13 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
         notes.append("stars left as they are: install StarNet++ (Setup links it) for star reduction")
     img, gate = finishing.quality_gate(img)
     notes += gate
+    # The background fix shifts each channel, which can leave the stars a little tinted: balance them once more.
+    img = finishing.cap_star_colour(img, finishing.star_mask(img), cap=0.15)
     out = {"linear": str(work / "result_linear.fits"), "folder": str(work), "frames": found["count"],
            "cleanup_bytes": _folder_bytes(proc)}
     if rec["duo"] and _hoo_main(rec):
         # Duo-Band on emission nebulae: Hα/OIII is the natural palette for this filter, so HOO is the main result.
-        hoo = finishing.hoo(img)
+        hoo = finishing.hoo(img)  # (img's stars were already white-balanced below)
         hoo, _ = finishing.quality_gate(finishing.cap_star_colour(hoo, finishing.star_mask(hoo)))
         saved = finishing.save_final(hoo, work / "result_final", header)
         out["natural"] = finishing.save_final(img, work / "result_natural", header)["tif"]
