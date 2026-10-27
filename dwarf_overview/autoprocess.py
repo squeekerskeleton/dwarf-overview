@@ -652,6 +652,7 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
                     (j.step(3, "skipped", "GraXpert wasn't found (set it in Settings), so background extraction was skipped.") or c))
     # 5. plate solve + colour
     current = carry(4, "calibrated", current, lambda c: _calibrate(j, plan, shot, c, work, tune, rec, v14))
+    current = _flatten(j, current, work, rec)
     # 6. deconvolution
     current = carry(5, "deconvolved", current, lambda c: _deconvolve(j, exe, c, work, tune, t, rec))
     # 7. noise reduction
@@ -773,8 +774,10 @@ def _graxpert(j: _Job, gx: dict, exe: str, current: Path, work: Path, t: dict, r
     # Galaxies like M 31 fill much of the DWARF's 2.9°×1.6° field, and a rough background model eats their faint
     # outer halo; a smoother model leaves it. Nebulae and clusters take the usual light smoothing.
     kind = (rec or {}).get("kind") or ""
-    default = 0.6 if "galaxy" in kind else 0.5 if ("reflection" in kind or "cluster" in kind) else 0.2
-    smooth = float(gx.get("smoothing") if gx.get("smoothing") is not None else default)
+    # Emission nebulae went from 0.2 to 0.4: at 0.2 GraXpert took part of C 33's glow for sky and left a dark moat
+    # under the Veil. A plan may ask for more smoothing, not less.
+    default = 0.6 if "galaxy" in kind else 0.5 if ("reflection" in kind or "cluster" in kind) else 0.4
+    smooth = max(default, float(gx.get("smoothing"))) if gx.get("smoothing") is not None else default
     out, tail = _gx_run(j, exe, current, work, t, ["background-extraction", "-correction", corr,
                                                    "-smoothing", f"{smooth:.2f}"], "result_bg", 3)
     if not out:
@@ -911,6 +914,32 @@ def _deconvolve(j: _Job, exe: str | None, current: Path, work: Path, tune: list[
     return current
 
 
+def _flatten(j: _Job, current: Path, work: Path, rec: dict) -> Path:
+    """After colour calibration: flatten what's left of the background (ramp, moat around the subject, rotation
+    corners) and, for Duo-Band, give OIII its teal. Added to the colour step's note; a failure here never stops
+    the run."""
+    notes, out = [], current
+    try:
+        flat = work / "result_flat.fits"
+        res = finishing.flatten(current, flat)
+        out = flat
+        if res["note"]:
+            notes.append(res["note"])
+        if rec.get("duo"):
+            note = finishing.balance_oiii(flat, flat)
+            if note:
+                notes.append(note)
+    except Exception as e:
+        j.log(f"Background flattening skipped ({e}).")
+        return current
+    if notes:
+        s = j.job["steps"][4]
+        s["note"] = (s["note"].rstrip(".") + "; " if s["note"] else "") + "; ".join(notes) + "."
+        j.log(notes[0])
+        j.save()
+    return out
+
+
 def _denoise(j: _Job, exe: str | None, current: Path, work: Path, tune: list[str], t: dict, rec: dict) -> Path:
     j.step(6, "running")
     note, out = "", None
@@ -930,6 +959,12 @@ def _denoise(j: _Job, exe: str | None, current: Path, work: Path, tune: list[str
     finishing.chroma_denoise(src, final, sigma)
     note = (note + "; " if note else "") + (f"colour noise smoothed (σ {sigma})" +
                                              (", stronger for Duo-Band, where only the red pixels see Hα" if rec["duo"] else ""))
+    try:
+        cover = finishing.coverage_denoise(final, final)
+        if cover:
+            note += "; " + cover
+    except Exception as e:  # a nicety; the run goes on without it
+        j.log(f"Edge smoothing skipped ({e}).")
     j.outputs["denoised"] = str(final)
     j.step(6, "done", note[:1].upper() + note[1:] + ".")
     return final

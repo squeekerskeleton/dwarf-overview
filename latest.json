@@ -1,6 +1,6 @@
 {
-  "version": "0.12.11",
-  "notes": "StarNet star reduction on nebulae eased from 42% to 30% dimmer stars, so busy star fields still look natural.",
-  "sha256": "68264842432f2a634568e6c2ffd83469ee115af8a97ea187a1042389ad6aaa02",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.11.zip"
+  "version": "0.13.0",
+  "notes": "Flat backgrounds and truer colour: sky-only background flattening after colour calibration (removes ramps, the dark moat around a nebula and bright rotation corners), GraXpert smoothing 0.4 for nebulae, OIII balanced to teal in Duo-Band natural colour, and extra smoothing only where fewer frames cover the edges.",
+  "sha256": "70e8828376abe3afc4890c7d03446049dd5c03e2a842c8b53f2c2c70317e29e3",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.13.0.zip"
 }
