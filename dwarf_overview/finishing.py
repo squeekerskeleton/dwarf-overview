@@ -349,6 +349,23 @@ def sky_smooth(img, stars=None, sigma: float = 1.2, amount: float = 1.0):
     return np.clip(img + (new - lum)[..., None], 0, 1).astype("float32")
 
 
+def sky_chroma_smooth(img, stars=None, sigma: float = 2.0):
+    """Smooth the colour speckle of the faint sky, colour only (brightness untouched), fading out a few noise
+    levels above the sky and never on stars. sky_smooth works on brightness only, so per-channel speckle set a
+    floor on the grain: C 33 stayed at 0.16 where the DWARF's own image, with grey sky grain, measured 0.08."""
+    import cv2
+    np = _np()
+    w = np.array(IMX678_LUMA, dtype="float32")
+    lum = (img @ w).astype("float32")
+    sky, noise = _sky_noise(lum)
+    weight = np.clip(1 - (cv2.GaussianBlur(lum, (0, 0), 2.0) - sky) / max(1e-6, 4 * noise), 0, 1)
+    if stars is not None:
+        weight = weight * (1 - stars)
+    chroma = img - lum[..., None]
+    soft = np.stack([cv2.GaussianBlur(chroma[..., c], (0, 0), sigma) for c in range(3)], axis=-1)
+    return np.clip(img + weight[..., None] * (soft - chroma), 0, 1).astype("float32")
+
+
 def grain(img) -> float:
     """Sky noise ÷ sky level of a stretched image (C 33: 0.41 in 0.12.2, 0.05 in 0.12.3, DWARF's JPG 0.16)."""
     q = quality(img)
@@ -361,6 +378,9 @@ def smooth_to_grain(img, stars=None, target: float = 0.18):
     g0 = grain(img)
     if g0 <= target:
         return img, g0, g0
+    img = sky_chroma_smooth(img, stars)
+    if grain(img) <= target:
+        return img, g0, grain(img)
     best = None
     for sigma in (1.0, 1.5, 2.0):
         lo, hi = 0.0, 1.0

@@ -556,7 +556,9 @@ def _recommend(plan: dict, a: dict, found: dict, shot: dict) -> dict:
     elif "galaxy" in kind:
         r["stars"] = 0.4
     else:
-        r["stars"] = 0.5  # nebulae: about 30% dimmer stars (42% left C 33's Cygnus field looking empty)
+        # Nebulae: about 18% dimmer stars. 42% left C 33's Cygnus field looking empty, and 30% (0.12.11-0.13.2)
+        # still had 812 stars where Kip's reference C 33 kept 1190.
+        r["stars"] = 0.3
     # Object deconvolution at half strength: the DWARF's 2.75"/px is undersampled, so there's detail to gain in
     # the nebula but not much in the stars, and too much brings out noise.
     r["deconv"] = 0.5
@@ -1020,17 +1022,26 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
             notes.append("the plan's " + ", ".join(c["command"] for c in linear_extra) + " didn't run in Siril")
     else:
         siril([], "result_linear")  # keep result_linear.fits for the record, as before
+    import tifffile
+    import numpy as np
     img, header = finishing.read_fits_rgb(source)
-    # Duo-Band nebulae are mostly faint gas: a slightly brighter sky shows more of it. Broadband stays darker.
-    target = 0.12 if rec["duo"] else 0.11
+    # FITS rows run bottom-up: shown top-down, 0.8-0.13 pictures came out upside down next to the DWARF's own
+    # (C 33's arc opened the other way). From here on the image is the right way up; FITS copies are flipped back.
+    img = np.flipud(img)
+    # Duo-Band nebulae: a dark sky with a bright, saturated nebula. 0.13.2 put C 33's sky at 0.111 with the nebula
+    # 0.145 above it; Kip's reference C 33 (which looked better) had a 0.088 sky, 0.22 Hα and a smoother sky.
+    duo = rec["duo"]
+    target = 0.09 if duo else 0.11
+    sat = 0.55 if duo else 0.35
     img, info = finishing.colour_stretch(img, target_bg=target)
     stars = finishing.star_mask(img)
-    img = finishing.cap_star_colour(finishing.saturation(img, 0.35, stars=stars), stars, cap=0.15)
-    # Aim the nebula at a measured brightness (0.16 in 0.12.7 brought C 33 to 85% of 0.11.1's punch; 0.18 closes the gap).
-    img, neb0, neb1, lift = finishing.lift_to(img, stars, 0.18)
-    # Smooth the sky only as far as a natural grain (about 0.18 of the sky level): 0.12.3 smoothed C 33 to 0.05,
-    # which looked plasticky.
-    img, g0, g1 = finishing.smooth_to_grain(img, stars, 0.18)
+    # Star colour: a cap of 0.15 turned C 33's stars yellowish-white; 0.25 keeps white, blue and orange stars.
+    img = finishing.cap_star_colour(finishing.saturation(img, sat, stars=stars), stars, cap=0.25)
+    # Aim the nebula at a measured brightness (0.18 matched 0.11.1's punch on C 33; the reference is 0.22).
+    img, neb0, neb1, lift = finishing.lift_to(img, stars, 0.22 if duo else 0.18)
+    # Smooth the sky only as far as a natural grain (sky noise ÷ sky level): 0.12.3 smoothed C 33 to 0.05, which
+    # looked plasticky; the reference sits near 0.08 and looks smooth, not plastic.
+    img, g0, g1 = finishing.smooth_to_grain(img, stars, 0.11 if duo else 0.18)
     try:  # rotation corners are noisier than the rest; measured here, after the stretch, where it shows
         img, edge_note = finishing.even_noise(img, stars)
     except Exception as e:
@@ -1045,13 +1056,11 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
     if rec["duo"]:
         img, ha_note = finishing.keep_ha_red(img, stars)
         extra += [ha_note] if ha_note else []
-    finishing.write_fits_rgb(work / "result_stretched.fits", img, header)
-    import tifffile
-    import numpy as np
+    finishing.write_fits_rgb(work / "result_stretched.fits", np.flipud(img), header)
     tifffile.imwrite(str(out), (np.clip(img, 0, 1) * 65535 + 0.5).astype("uint16"), photometric="rgb")
     notes.append(f"colour-keeping stretch to a {int(target * 100)}% sky (brightness stretched, colour ratios kept, "
-                 "sky noise kept grey); saturation +35% on the subject, not the sky or the stars; star colour capped "
-                 "so stars keep a tint instead of turning into red or cyan discs; "
+                 f"sky noise kept grey); saturation +{int(sat * 100)}% on the subject, not the sky or the stars; star "
+                 "colour capped so stars keep a tint instead of turning into red or cyan discs; "
                  + (f"faint nebula lifted ×{lift:.2f}, from {neb0:.3f} to {neb1:.3f} above the sky; " if lift > 1 else
                     f"nebula already {neb0:.3f} above the sky, not lifted; ")
                  + (f"sky grain {g0:.2f} smoothed to {g1:.2f} of the sky level" if g1 < g0 else
@@ -1107,7 +1116,7 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
         notes.append(f"warning: the sky shows colour blotches (green-magenta spread {blotch * 1000:.1f}/1000, "
                      "visible above 4)")
     # The background fix shifts each channel, which can leave the stars a little tinted: balance them once more.
-    img = finishing.cap_star_colour(img, finishing.star_mask(img), cap=0.15)
+    img = finishing.cap_star_colour(img, finishing.star_mask(img), cap=0.25)
     out = {"linear": str(work / "result_linear.fits"), "folder": str(work), "frames": found["count"],
            "cleanup_bytes": _folder_bytes(proc)}
     if rec["duo"] and _hoo_main(rec):

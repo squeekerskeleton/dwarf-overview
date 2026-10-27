@@ -1,6 +1,6 @@
 {
-  "version": "0.13.2",
-  "notes": "Natural colour fixes, round 3: no more green sky blotches (teal only where OIII is clearly there), H\u03b1 kept red (the nebula lift scales signal, not the grey sky under it), edges and rotation corners actually flattened (finer edge pass, and again on the final image), and a check that warns about sky colour blotches.",
-  "sha256": "9cbf7c461ab175f36914433e63f330616519a85c2759130dbf8da4f319a0664f",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.13.2.zip"
+  "version": "0.14.0",
+  "notes": "C 33 tuned against the DWARF's own picture: pictures now the right way up; Duo-Band nebulae get a darker sky (9%), a brighter H\u03b1 (0.22 above the sky), +55% saturation, a smoother sky (colour speckle smoothed, grain 0.11), lighter star reduction (about 18%) and freer star colour.",
+  "sha256": "33a7194d14ceaad73988be3d84381fecdefe581dfed2cf7c69cc3148f808d9be",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.14.0.zip"
 }
