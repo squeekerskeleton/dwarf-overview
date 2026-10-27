@@ -732,7 +732,10 @@ def _sharpen(img, linear: bool, up: int):
     er = 17 * up
     disc = (base.mean(axis=2) > np.percentile(base.mean(axis=2), 99.5) * 0.25).astype("uint8")
     lm = cv2.GaussianBlur(cv2.erode(disc, np.ones((er, er), np.uint8)).astype("float32"), (0, 0), er / 2.2)[..., None]
-    out = np.clip(out * lm + base * (1 - lm), 0, 1)
+    out = out * lm + base * (1 - lm)
+    # A soft shoulder instead of a hard clip: 0.16.1 clipped 0.77% of the disc (Tycho and the brightest rays).
+    out = np.where(out > 0.9, 0.9 + 0.1 * np.tanh((out - 0.9) / 0.1), out)
+    out = np.clip(out, 0, 1)
     return out, (f"white balance on the highlands, edge-preserving denoise, Richardson-Lucy (15 iterations, PSF σ {sigma:.1f}) "
                  "and three-scale detail gains (fine +80%, medium +50%, coarse +20%); the limb and sky are protected from halos.")
 

@@ -1,6 +1,6 @@
 {
-  "version": "0.16.1",
-  "notes": "Moon stack: fixes a nearly black result (tone matching divided by slightly negative pixels left by the alignment); the Moon is found and centred whatever its brightness.",
-  "sha256": "84f0b83f9dc5d9db7f8fa17f73134a2576f0d0ceab71843afed1094cb6873d9c",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.16.1.zip"
+  "version": "0.16.2",
+  "notes": "Moon stack: the brightest craters and rays keep their detail (a soft highlight shoulder instead of clipping).",
+  "sha256": "6e55fb7bfbb457376df21870d7738da3fe9d9a874da3669544c634c25f9e3bb7",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.16.2.zip"
 }
