@@ -996,7 +996,7 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
         return j.run(_siril_args(fin, work), work, 3600)
 
     out = work / "result_stretched.tif"
-    for f in (out, work / "result_stretched.fits"):
+    for f in (out, work / "result_stretched.fits", work / "result_stars.tif", work / "result_hoo_stretched.tif"):
         f.unlink(missing_ok=True)
     cmds = pre + [f"{c['command']} {(c.get('args') or '').strip()}".rstrip() for c in linear_extra]
     if own_stretch:
@@ -1028,6 +1028,10 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
     # FITS rows run bottom-up: shown top-down, 0.8-0.13 pictures came out upside down next to the DWARF's own
     # (C 33's arc opened the other way). From here on the image is the right way up; FITS copies are flipped back.
     img = np.flipud(img)
+    if rec["duo"] and _hoo_main(rec) and rec["stars"] > 0 and tools.find_tool("starnet"):
+        done = _layered(j, img, header, work, out, notes)
+        if done:
+            return done
     # Duo-Band nebulae: a dark sky with a bright, saturated nebula. 0.13.2 put C 33's sky at 0.111 with the nebula
     # 0.145 above it; Kip's reference C 33 (which looked better) had a 0.088 sky, 0.22 Hα and a smoother sky.
     duo = rec["duo"]
@@ -1072,6 +1076,49 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
     return out
 
 
+def _layered(j: _Job, img, header, work: Path, out: Path, notes: list) -> Path | None:
+    """Duo-Band emission nebulae with StarNet: the layered finish (finishing.layered_finish), which beat the DWARF's
+    own C 33 where the single-image path didn't. Returns the stretched image, or None to use the standard path."""
+    import numpy as np
+    import tifffile
+    try:
+        img, wedge, worst = finishing.even_linear(img)
+        rgb = finishing.base_stretch(img, finishing.LAYERED["stretch"], finishing.LAYERED["black_sigma"],
+                                     0.8 * finishing.LAYERED["sky_target"])
+        base = work / "result_basestretch.tif"
+        tifffile.imwrite(str(base), (rgb * 65535 + 0.5).astype("uint16"), photometric="rgb")
+        if not _starnet(j, base, work / "result_sn.tif"):
+            raise OSError("StarNet didn't write its image")
+        starless = finishing.read_tif(work / "result_sn.tif")
+        if starless.shape != rgb.shape:
+            raise OSError(f"StarNet's image is {starless.shape[1]}×{starless.shape[0]}, not {rgb.shape[1]}×{rgb.shape[0]}")
+        final, sl, stars, lnotes = finishing.layered_finish(rgb, starless)
+        hoo = finishing.layered_finish(rgb, starless, {"hoo": 1})[0]
+    except (OSError, ValueError) as e:
+        j.log(f"Layered finish skipped ({e}); using the standard stretch.")
+        notes.append("the layered finish couldn't run, so the standard stretch was used")
+        return None
+    for f in (base, work / "result_sn.tif"):
+        f.unlink(missing_ok=True)
+    finishing.write_fits_rgb(work / "result_stretched.fits", np.flipud(final), header)
+    tifffile.imwrite(str(out), (np.clip(final, 0, 1) * 65535 + 0.5).astype("uint16"), photometric="rgb")
+    tifffile.imwrite(str(work / "result_starless.tif"), (sl * 65535 + 0.5).astype("uint16"), photometric="rgb")
+    tifffile.imwrite(str(work / "result_hoo_stretched.tif"), (hoo * 65535 + 0.5).astype("uint16"), photometric="rgb")
+    # The stars on black, to screen over the starless image in an editor; its presence also tells step 8 the stars are done.
+    tifffile.imwrite(str(work / "result_stars.tif"), (stars * 65535 + 0.5).astype("uint16"), photometric="rgb")
+    p = finishing.LAYERED
+    notes.append(f"layered finish (StarNet separates the stars first, the nebula and sky are finished without them): "
+                 + (f"rotation edges evened ({wedge * 100:.0f}% of the frame up to {worst:.1f}× noisier); " if wedge > 0.005 else "")
+                 + "colour-keeping arcsinh stretch; " + "; ".join(lnotes)
+                 + f"; sky smoothed, saturation +{int((p['neb_sat'] - 1) * 100)}% on the nebula, Hα warmed to orange-red; "
+                 f"stars tightened and put back, StarNet's noise specks dropped; sky at {p['sky_target'] * 100:.1f}%, "
+                 "neutral, background and edges flattened")
+    msg = "; ".join(notes)
+    j.outputs["stretched"] = str(out)
+    j.step(7, "done", msg[:1].upper() + msg[1:] + ".")
+    return out
+
+
 def _starnet(j: _Job, src: Path, dst: Path) -> bool:
     exe = tools.find_tool("starnet")
     if not exe:
@@ -1094,7 +1141,10 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
     except OSError:
         pass
     notes = []
-    if rec["stars"] <= 0:
+    layered = (work / "result_stars.tif").exists()
+    if layered:
+        notes.append("stars already separated and put back in the layered finish (the starless image is kept too)")
+    elif rec["stars"] <= 0:
         notes.append("left the stars alone, as they're the subject")
     elif _starnet(j, stretched, work / "result_starless.tif"):
         try:
@@ -1116,13 +1166,17 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
         notes.append(f"warning: the sky shows colour blotches (green-magenta spread {blotch * 1000:.1f}/1000, "
                      "visible above 4)")
     # The background fix shifts each channel, which can leave the stars a little tinted: balance them once more.
-    img = finishing.cap_star_colour(img, finishing.star_mask(img), cap=0.25)
+    if not layered:
+        img = finishing.cap_star_colour(img, finishing.star_mask(img), cap=0.25)
     out = {"linear": str(work / "result_linear.fits"), "folder": str(work), "frames": found["count"],
            "cleanup_bytes": _folder_bytes(proc)}
     if rec["duo"] and _hoo_main(rec):
         # Duo-Band on emission nebulae: Hα/OIII is the natural palette for this filter, so HOO is the main result.
-        hoo = finishing.hoo(img)  # (img's stars were already white-balanced below)
-        hoo, _ = finishing.quality_gate(finishing.cap_star_colour(hoo, finishing.star_mask(hoo)))
+        if layered and (work / "result_hoo_stretched.tif").exists():  # made from the starless layer in step 7
+            hoo, _ = finishing.quality_gate(finishing.read_tif(work / "result_hoo_stretched.tif"))
+        else:
+            hoo = finishing.hoo(img)  # (img's stars were already white-balanced below)
+            hoo, _ = finishing.quality_gate(finishing.cap_star_colour(hoo, finishing.star_mask(hoo)))
         saved = finishing.save_final(hoo, work / "result_final", header)
         out["natural"] = finishing.save_final(img, work / "result_natural", header)["tif"]
         notes.append("Duo-Band, so the main result is the HOO palette (Hα red, OIII teal); the natural-colour "

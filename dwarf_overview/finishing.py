@@ -861,3 +861,236 @@ def sky_blotches(img, tile: int = 96) -> float:
             if m.mean() > 0.5:
                 vals.append(float(np.mean(tint[r * tile:(r + 1) * tile, c * tile:(c + 1) * tile][m])))
     return float(np.std(vals)) if len(vals) >= 10 else 0.0
+
+
+# --- Layered finishing (0.15.0) --------------------------------------------------------------------------------
+# Worked out on Kip's C 33 against the DWARF's own picture of it, which beat 0.13.2 and 0.14.0 on contrast and sky
+# smoothness. The nebula and the sky are finished on StarNet's starless layer, where stars can't be mistaken for
+# nebula or noise, and the stars are put back afterwards with a screen blend. Prototype on C 33: contrast 69 natural,
+# 79 HOO (DWARF 58, 0.14.0 36), sky noise 0.0030 (DWARF 0.0027, 0.14.0 0.0049), flatness 0.43 (DWARF 1.03).
+
+# ha_warm 0.8 turned bright Hα orange-yellow and 0.6 was still orange; 0.5 with ha_blue 0.3 is the DWARF's brick
+# red. For HOO, OIII scaled to 0.75 of Hα's strength is balanced (1.1 went cyan).
+# star_gamma 1.5 at scale 1.15 gives tight but bright stars; a floor of 0.035 drops the red specks StarNet leaves
+# as "stars"; sky_blur 3 at mix 0.8 took the sky noise from 0.0034 to 0.0030 without looking plastic.
+LAYERED = dict(stretch=100.0, black_sigma=2.5, sky_target=0.085, neb_target=0.27, neb_sat=1.35, neb_dn=0.6,
+               star_scale=1.15, star_sat=1.0, star_gamma=1.5, star_floor=0.035, sky_dn=14.0, sky_blur=3.0, sky_mix=0.8,
+               sky_grey=0.6, ha_warm=0.5, ha_blue=0.3, hoo=0, o3_boost=0.75)
+
+
+def _mad(x) -> float:
+    np = _np()
+    m = np.median(x)
+    return 1.4826 * float(np.median(np.abs(x - m)))
+
+
+def even_linear(img) -> tuple:
+    """Linear RGB: the edges that fewer frames covered after field rotation are noisier; blend them toward a
+    blurred copy just as far as their extra noise. Returns (image, share of the frame over 1.3x, worst ratio)."""
+    import cv2
+    np = _np()
+    lum = img.mean(axis=2)
+    hp = lum - cv2.GaussianBlur(lum, (0, 0), 2)
+    ts = 64
+    h, w = lum.shape
+    nm = cv2.resize(np.abs(hp), (max(1, w // ts), max(1, h // ts)), interpolation=cv2.INTER_AREA)
+    nm = cv2.medianBlur(nm.astype("float32"), 3)
+    typ = max(1e-12, float(np.median(nm)))
+    ratio = cv2.GaussianBlur(cv2.resize(nm / typ, (w, h), interpolation=cv2.INTER_LINEAR), (0, 0), 24)
+    k = np.clip((ratio - 1.15) / 0.6, 0, 1)[..., None]  # none where normal, full where 1.75x noisier or more
+    smooth = np.stack([cv2.GaussianBlur(img[..., c], (0, 0), 3.0) for c in range(3)], -1)
+    return (img * (1 - k) + smooth * k).astype("float32"), float((ratio > 1.3).mean()), float(ratio.max())
+
+
+def base_stretch(lin, stretch: float = 100.0, black_sigma: float = 2.5, sky: float = 0.068):
+    """Linear RGB -> stretched RGB for StarNet and the layered finish: each channel's sky removed, an arcsinh
+    stretch of the brightness that keeps every pixel's colour ratios, then a midtone transfer that puts the sky at
+    `sky` (kept a little under the final target, as the nebula curve and the star screen add some)."""
+    np = _np()
+    sky0 = np.array([_sky(lin[..., c][::4, ::4]) for c in range(3)], dtype="float32")
+    x = lin - sky0
+    lum = x.mean(axis=2)
+    sub = lum[::4, ::4]
+    sig = _mad(sub[sub < np.percentile(lum, 50)])
+    peak = float(np.percentile(lum, 99.99))
+    bp = -black_sigma * sig
+    ln = np.clip((lum - bp) / max(1e-9, peak - bp), 0, None)
+    ls = np.arcsinh(stretch * ln) / np.arcsinh(stretch)
+    ratio = np.where(lum - bp > 1e-7, ls / np.maximum(ln, 1e-7), 0)[..., None] / max(1e-9, peak - bp)
+    rgb = np.clip((x - bp) * ratio, 0, 1)
+    s0 = _sky(rgb.mean(axis=2)[::4, ::4])
+    if 0 < s0 < 1 and s0 != sky:
+        m = (sky - 1) * s0 / ((2 * sky - 1) * s0 - sky)  # the midtone that maps s0 to sky
+        rgb = np.clip(((m - 1) * rgb) / ((2 * m - 1) * rgb - m), 0, 1)
+    return rgb.astype("float32")
+
+
+def starless_subject(starless):
+    """Where the nebula is, from the starless layer: big structure well above the sky (sigma-12 blur, above sky +
+    6 noise levels, 20000 px or more) that doesn't touch the frame's border, grown by 30 px. Edge glow touches the
+    border and isn't subject; 0.13's mask counted it in (38-52% of C 33's frame against 8%), so it was never
+    flattened. If nothing qualifies (a subject that fills the frame), big structure touching the border counts."""
+    import cv2
+    np = _np()
+    bl = cv2.GaussianBlur(starless.mean(axis=2), (0, 0), 12)
+    sub = bl[::4, ::4]
+    sky, noise = _sky(sub), _mad(sub[sub < np.percentile(bl, 50)])
+    cand = (bl > sky + 6 * noise).astype("uint8")
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(cand, 8)
+    h, w = cand.shape
+    keep, border = [], []
+    for i in range(1, n):
+        x0, y0, ww, hh, area = stats[i]
+        if area < 20000:
+            continue
+        (border if x0 <= 2 or y0 <= 2 or x0 + ww >= w - 2 or y0 + hh >= h - 2 else keep).append(i)
+    ids = keep or border
+    subj = np.isin(lab, ids).astype("uint8") if ids else np.zeros_like(cand)
+    return cv2.dilate(subj, np.ones((61, 61), np.uint8)).astype("float32")
+
+
+def flatten_tiles(img, mask, ts: int = 96):
+    """Stretched RGB: a background model from 96 px tiles (each the median of its darker 60% of sky pixels),
+    tiles mostly covered by the subject filled in from their neighbours, smoothed and subtracted (the median level
+    kept). Handles the rotation wedges in the corners, which a smooth polynomial can't."""
+    import cv2
+    np = _np()
+    h, w = img.shape[:2]
+    gh, gw = -(-h // ts), -(-w // ts)
+    hole = np.zeros((gh, gw), np.uint8)
+    grids = np.zeros((3, gh, gw), np.float32)
+    for r in range(gh):
+        for c in range(gw):
+            tile = (slice(r * ts, min(h, (r + 1) * ts)), slice(c * ts, min(w, (c + 1) * ts)))
+            m = mask[tile] < 0.5
+            if m.mean() < 0.3:
+                hole[r, c] = 1
+                continue
+            for ch in range(3):
+                v = img[tile][..., ch][m]
+                grids[ch, r, c] = np.median(v[v <= np.percentile(v, 60)])
+    if hole.all():
+        return img
+    out = img.copy()
+    for ch in range(3):
+        g = grids[ch]
+        lo, hi = float(g[hole == 0].min()), float(g[hole == 0].max())
+        g8 = np.clip((g - lo) / max(hi - lo, 1e-6) * 255, 0, 255).astype(np.uint8)
+        filled = cv2.inpaint(g8, hole, 3, cv2.INPAINT_TELEA).astype(np.float32) / 255 * (hi - lo) + lo
+        filled = cv2.GaussianBlur(np.where(hole == 1, filled, g).astype(np.float32), (0, 0), 1.0)
+        model = cv2.resize(filled, (gw * ts, gh * ts), interpolation=cv2.INTER_CUBIC)[:h, :w]
+        model = cv2.GaussianBlur(model, (0, 0), ts / 3)
+        out[..., ch] = img[..., ch] - model + float(np.median(filled))
+    return np.clip(out, 0, 1).astype("float32")
+
+
+def edge_band(img, band: int = 300):
+    """Stretched RGB: the outermost lines of each side can still glow after flattening (C 33's top and left 40 px
+    sat 0.126/0.136 against a 0.102 centre). Per-line sky medians in the outer `band` px, smoothed, and only the
+    excess over the interior removed, fading to nothing at `band` px in."""
+    import cv2
+    np = _np()
+    h, w = img.shape[:2]
+    if h < 3 * band or w < 3 * band:
+        band = max(8, min(h, w) // 6)
+    out = img.copy()
+    fade = np.linspace(1, 0, band) ** 0.5
+    for c in range(3):
+        ch = out[..., c]
+        inner = float(np.median(ch[band:h - band, band:w - band][::4, ::4]))
+        for side in ("top", "bottom", "left", "right"):
+            lines = [ch[i] if side == "top" else ch[h - 1 - i] if side == "bottom" else ch[:, i] if side == "left"
+                     else ch[:, w - 1 - i] for i in range(band)]
+            prof = np.array([np.median(line[band:-band]) for line in lines], dtype="float32") - inner
+            prof = cv2.GaussianBlur(prof.reshape(-1, 1), (0, 0), 6).ravel()
+            prof = np.clip(prof, 0, None) * fade
+            if side == "top":
+                ch[:band] -= prof[:, None]
+            elif side == "bottom":
+                ch[h - band:] -= prof[::-1][:, None]
+            elif side == "left":
+                ch[:, :band] -= prof[None, :]
+            else:
+                ch[:, w - band:] -= prof[::-1][None, :]
+    return np.clip(out, 0, 1).astype("float32")
+
+
+def layered_finish(rgb, starless, p: dict | None = None) -> tuple:
+    """Finish the nebula and sky on the starless layer, then screen the stars back. rgb is base_stretch's output
+    and starless StarNet's version of it. Returns (final, finished starless, finished stars, notes)."""
+    import cv2
+    np = _np()
+    p = {**LAYERED, **(p or {})}
+    notes = []
+    stars = np.clip(1 - (1 - rgb) / np.maximum(1 - starless, 1e-4), 0, 1)
+    mask = starless_subject(starless)
+    notes.append(f"subject {mask.mean() * 100:.0f}% of the frame (border glow left out)")
+    sl = flatten_tiles(starless, mask)
+    # Nebula curve towards a measured brightness above the sky, ramped in from the noise.
+    lum = sl.mean(axis=2)
+    ssky = _sky(lum[::4, ::4])
+    snoise = _mad(cv2.GaussianBlur(lum, (0, 0), 2)[::4, ::4][lum[::4, ::4] < np.percentile(lum, 50)])
+    small = cv2.resize(lum, (lum.shape[1] // 2, lum.shape[0] // 2), interpolation=cv2.INTER_AREA)
+    neb = float(np.percentile(cv2.medianBlur((np.clip(small, 0, 1) * 255).astype(np.uint8), 5), 99) / 255 - ssky)
+    gain = float(np.clip(p["neb_target"] / max(neb, 1e-4), 1.0, 3.5))
+    above = np.clip(lum - ssky, 0, None)
+    wgt = cv2.GaussianBlur(np.clip((above - 1.5 * snoise) / max(1e-9, 4 * snoise), 0, 1).astype("float32"), (0, 0), 3)
+    new = ssky + above * (1 + (gain - 1) * wgt)
+    new = np.minimum(new, 1 - (1 - np.clip(new, 0, 1)) * 0.98)
+    sl = sl * (new / np.maximum(lum, 1e-5))[..., None]
+    notes.append(f"nebula lifted ×{gain:.2f} (from {neb:.3f} above the sky)")
+    # Brightness-only denoise of the sky (edge-preserving), outside the nebula.
+    lum = sl.mean(axis=2).astype("float32")
+    den = cv2.bilateralFilter(lum, 0, p["sky_dn"] * snoise * 3, p["sky_dn"])
+    sl = sl * (1 + (1 - wgt)[..., None] * ((den / np.maximum(lum, 1e-5))[..., None] - 1))
+    if p["neb_dn"] > 0:  # and a lighter one inside the nebula
+        lum = sl.mean(axis=2).astype("float32")
+        den = cv2.bilateralFilter(lum, 0, 6 * snoise * 3, 4)
+        sl = sl * (1 + (p["neb_dn"] * wgt)[..., None] * ((den / np.maximum(lum, 1e-5))[..., None] - 1))
+    # Saturation on the nebula only; Hα warmed to orange-red (green toward ha_warm x red, blue down toward ha_blue x red).
+    # Saturation only on the subject: on synthetic data with faint large-scale colour mottling (what turned green
+    # in 0.13.1) saturating everything above the noise made green blotches of the sky.
+    swgt = wgt * cv2.GaussianBlur(mask, (0, 0), 20)
+    lum = sl.mean(axis=2, keepdims=True)
+    sl = lum + (sl - lum) * (1 + (p["neb_sat"] - 1) * swgt[..., None])
+    # The sky's faint colour eased toward grey (what colour_stretch's protect did), so mottling can't show.
+    sl = lum + (sl - lum) * (1 - p["sky_grey"] * (1 - wgt))[..., None]
+    r, g, b = sl[..., 0], sl[..., 1], sl[..., 2]
+    skyc = [_sky(sl[..., c][::4, ::4]) for c in range(3)]
+    if p["hoo"]:  # HOO from the starless layer: red = Hα, green = blue = OIII, scaled toward Hα's strength
+        o3 = (g - skyc[1] + b - skyc[2]) / 2
+        neb = wgt > 0.5
+        scale = 1.0
+        if neb.sum() > 100:
+            scale = float(np.percentile((r - skyc[0])[neb], 99) / max(np.percentile(o3[neb], 99), 1e-5)) * p["o3_boost"]
+        o3 = o3 * (1 + (float(np.clip(scale, 1.0, 3.0)) - 1) * wgt)
+        g, b = skyc[1] + o3, skyc[2] + o3
+    else:
+        ra, ga, ba = r - skyc[0], g - skyc[1], b - skyc[2]
+        ha = (ra > 1.5 * ba) & (swgt > 0.3)
+        g = np.where(ha & (ga < p["ha_warm"] * ra), g + 0.6 * (skyc[1] + p["ha_warm"] * ra - g), g)
+        if p["ha_blue"] > 0:
+            b = np.where(ha & (ba > p["ha_blue"] * ra), b - 0.6 * (ba - p["ha_blue"] * ra), b)
+    sl = flatten_tiles(np.clip(np.stack([r, g, b], -1), 0, 1).astype("float32"), mask)  # the steps above bring edges back
+    if p["sky_blur"] > 0:
+        lb = sl.mean(axis=2)
+        lbb = cv2.GaussianBlur(lb, (0, 0), p["sky_blur"])
+        mix = (p["sky_mix"] * (1 - wgt))[..., None]
+        sl = np.clip(sl * (1 + mix * ((lbb / np.maximum(lb, 1e-5))[..., None] - 1)), 0, 1)
+    # Stars: a little tighter (gamma), scaled, colour toned down; StarNet's noise specks (worst in the low-coverage
+    # edges) dropped by a floor; the stars' shared tint removed.
+    stars = stars ** p["star_gamma"]
+    slum = stars.mean(axis=2, keepdims=True)
+    stars = np.clip(slum + (stars - slum) * p["star_sat"], 0, 1) * p["star_scale"]
+    stars = np.clip((stars - p["star_floor"]) / (1 - p["star_floor"]), 0, 1)
+    sm = stars.mean(axis=2) > 0.15
+    if sm.sum() > 100:
+        tint = np.median(stars[sm] - stars[sm].mean(axis=1, keepdims=True), axis=0)
+        stars = np.clip(stars - tint * (stars.mean(axis=2, keepdims=True) > 0.02), 0, 1)
+    final = 1 - (1 - sl) * (1 - stars)
+    # The sky at the target, neutral, and no glow along the outermost lines.
+    final = np.clip(final - _sky(final.mean(axis=2)[::4, ::4]) + p["sky_target"], 0, 1)
+    fs = np.array([_sky(final[..., c][::4, ::4]) for c in range(3)])
+    final = edge_band(np.clip(final - fs + fs.mean(), 0, 1).astype("float32"))
+    sl = np.clip(sl - _sky(sl.mean(axis=2)[::4, ::4]) + p["sky_target"], 0, 1)
+    return final.astype("float32"), sl.astype("float32"), stars.astype("float32"), notes
