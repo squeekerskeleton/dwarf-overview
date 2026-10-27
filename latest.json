@@ -1,6 +1,6 @@
 {
-  "version": "0.11.0",
-  "notes": "Processing review: colour-keeping stretch (keeps SPCC colour), GraXpert deconvolution now gets the measured star size and uses the object model, SPCC with the DWARF 3's UV/IR filter and correct Duo-Band passbands, satellite-proof rejection for big sessions, smoother background model for galaxies.",
-  "sha256": "9330be213347b2e2daf0d98fd8a9d5bfe1094acdf37037a15c203710a996550f",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.11.0.zip"
+  "version": "0.11.1",
+  "notes": "Star size measured correctly (was about 2x too big: your focus is fine); the tuned denoise and stretch can't be overridden by weaker plan settings; frame selection keeps about 80% instead of 58%; HOO only for emission nebulae; smoother background for galaxies, clusters and reflection nebulae; frame edges feathered; rejected frames stay opt-in.",
+  "sha256": "4398d73485792c011a291318398f1998a342e7143790860a8b96471df5b12b9d",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.11.1.zip"
 }

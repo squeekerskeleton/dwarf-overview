@@ -216,7 +216,7 @@
       <div class="card"><h2>Processing plan</h2>
         <div id="autoBox" style="margin-bottom:10px;padding:10px;border:1px solid var(--accent);border-radius:8px">
           <div class="row"><button class="primary" id="autoRun">Auto-apply plan</button>
-            <label style="display:inline-flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="autoFailed" style="width:auto" title="Rejected frames rank far below the passed ones: only the few sharper, rounder and with more stars than a typical passed frame get in, at most a tenth of the stack."> Consider frames the DWARF rejected (only the best few get in)</label>
+            <label style="display:inline-flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="autoFailed" autocomplete="off" style="width:auto" title="Rejected frames rank far below the passed ones: only the few sharper, rounder and with more stars than a typical passed frame get in, at most a tenth of the stack."> Consider frames the DWARF rejected (only the best few get in)</label>
             <label style="display:inline-flex;gap:6px;align-items:center;margin:0" title="On: the result is the same size as the DWARF's frames. Off: cropped to the area every frame shares, which can be much smaller after hours of sky rotation."><input type="checkbox" id="autoFull" checked style="width:auto"> Keep the original frame size</label>
             <label id="autoReuseL" class="hidden" style="display:inline-flex;gap:6px;align-items:center;margin:0" title="Skips copying and stacking and redoes everything after it, in a few minutes."><input type="checkbox" id="autoReuse" style="width:auto"> Reuse the last stack (redo only the finishing)</label></div>
           <div id="autoFrames" class="caption">Runs the whole pipeline on every raw frame of this session: the DWARF's dark, stack, crop, background extraction, plate solve and colour calibration, deconvolution, noise reduction, stretch and star reduction, with settings chosen from your data. Your originals are never changed.</div>
@@ -790,6 +790,7 @@ async function autoFrames() {
     $("autoRun").disabled = !(f.fits || f.has_stack) || f.count < 3;
   } catch (e) { $("autoFrames").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
 }
+$("autoFailed").checked = false;  // browsers restore a ticked box after a reload; rejected frames stay opt-in each time
 $("autoFailed").onchange = autoFrames;
 function fmtDur(s) { s = Math.round(s); return s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.round(s % 3600 / 60)} min` : s >= 60 ? `${Math.round(s / 60)} min` : `${s} s`; }
 function drawAutoProgress(j, px = "auto") {

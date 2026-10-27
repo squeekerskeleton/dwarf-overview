@@ -436,11 +436,14 @@ def _recommend(plan: dict, a: dict, found: dict, shot: dict) -> dict:
     kind = ((assess.get("identification") or {}).get("object_type") or "").lower()
     r = {"minutes": minutes, "duo": _duo_band(shot, found), "kind": kind}
     if "keep_percent" not in plan["_from_plan"]:
-        r["keep_percent"] = 90 if found["count"] < 50 else 80 if found["count"] < 300 else 75
+        # The roundness cut (best 90%) comes on top of this one, so together they keep about 80% of a big session
+        # (0.10 kept 75% x 80% = 58% of M 45's frames).
+        r["keep_percent"] = 95 if found["count"] < 50 else 90 if found["count"] < 300 else 88
+    # less integration = more noise = stronger denoise; DWARF data needs a firm hand even on long sessions
+    r["denoise"] = 0.75 if minutes < 60 else 0.7 if minutes < 180 else 0.65
     if gx.get("run_denoise") and gx.get("denoise_strength") is not None:
-        r["denoise"] = float(gx["denoise_strength"])
-    else:  # less integration = more noise = stronger denoise; DWARF data needs a firm hand even on long sessions
-        r["denoise"] = 0.75 if minutes < 60 else 0.7 if minutes < 180 else 0.65
+        # A plan may ask for more, never much less: plans asked for 0.30, which measurably did nothing on C 33.
+        r["denoise"] = max(r["denoise"] - 0.05, min(1.0, float(gx["denoise_strength"])))
     if "cluster" in kind:
         r["stars"] = 0.0  # the stars are the subject
     elif "galaxy" in kind:
@@ -597,7 +600,7 @@ def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str], dark:
     framing = "current" if full else "min"
     found_n = sum(1 for f in (work / "lights").iterdir() if FRAME.search(f.name))
     j.step(1, "running", f"{'Dark-subtracting with cosmetic correction, then k' if dark else 'K'}eeping the sharpest "
-                         f"{plan['keep_percent']}% of frames that are also among the roundest 80%; middle frame as reference; {'full original frame size' if full else 'cropped to the area all frames share'}; "
+                         f"{plan['keep_percent']}% of frames that are also among the roundest 90%; middle frame as reference; {'full original frame size' if full else 'cropped to the area all frames share'}; "
                          f"{'Generalized ESD rejection (catches satellite trails)' if found_n >= 50 and 'sigma' not in plan['_from_plan'] else 'Winsorized rejection ' + str(plan['sigma_low']) + '/' + str(plan['sigma_high'])}"
                          f"{', frames weighted by their sharpness' if v14 else ''}.")
     for use_dark in ([True, False] if dark else [False]):
@@ -619,10 +622,11 @@ def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str], dark:
             # The middle frame as reference spreads the field rotation evenly both ways.
             f"setref {seq} {max(1, (n + 1) // 2)}",
             f"register {seq} -2pass",
-            f"seqapplyreg {seq} -filter-wfwhm={plan['keep_percent']}% -filter-round=80% -framing={framing}",
+            f"seqapplyreg {seq} -filter-wfwhm={plan['keep_percent']}% -filter-round=90% -framing={framing}",
             "set32bits",
             f"stack r_{seq} {rejection} -norm=addscale -output_norm"
-            f"{' -weight=wfwhm' if v14 else ''} -32b -out=../result_stack",
+            # -feather blends each frame's edge in over 40 px, so the turning alt-az field leaves no seams.
+            f"{' -weight=wfwhm -feather=40' if v14 else ''} -32b -out=../result_stack",
             ""]), encoding="utf-8")
         (work / "result_stack.fits").unlink(missing_ok=True)
         code, tail = j.run(_siril_args(script, work), work, step=1,
@@ -655,7 +659,8 @@ def _graxpert(j: _Job, gx: dict, exe: str, current: Path, work: Path, t: dict, r
     corr = gx.get("correction") or "Subtraction"
     # Galaxies like M 31 fill much of the DWARF's 2.9°×1.6° field, and a rough background model eats their faint
     # outer halo; a smoother model leaves it. Nebulae and clusters take the usual light smoothing.
-    default = 0.5 if "galaxy" in ((rec or {}).get("kind") or "") else 0.2
+    kind = (rec or {}).get("kind") or ""
+    default = 0.6 if "galaxy" in kind else 0.5 if ("reflection" in kind or "cluster" in kind) else 0.2
     smooth = float(gx.get("smoothing") if gx.get("smoothing") is not None else default)
     out, tail = _gx_run(j, exe, current, work, t, ["background-extraction", "-correction", corr,
                                                    "-smoothing", f"{smooth:.2f}"], "result_bg", 3)
@@ -761,13 +766,16 @@ def _deconvolve(j: _Job, exe: str | None, current: Path, work: Path, tune: list[
     if exe:
         fwhm = None
         try:
-            from . import framescore
-            sc = framescore.score(current)
-            if sc and sc["fwhm"] < 20:
-                fwhm = sc["fwhm"]
+            import numpy as np
+            from . import imaging
+            data, _ = finishing.read_fits_rgb(current)
+            data = np.clip(data / max(1e-9, float(np.percentile(data, 99.99))), 0, 1)
+            st = imaging.measure(imaging.LoadedImage(current, data, "fits", "32-bit")).get("stars") or {}
+            if st.get("fwhm_px_median") and st["fwhm_px_median"] < 20:
+                fwhm = float(st["fwhm_px_median"])
         except Exception:  # measuring is a nicety; GraXpert still runs with a typical DWARF value
             pass
-        psf = round(min(8.0, max(1.5, fwhm or 2.8)), 2)
+        psf = round(min(8.0, max(1.5, fwhm or 3.6)), 2)
         models = (["deconv-stellar", "deconv-obj"] if "cluster" in rec["kind"] else ["deconv-obj", "deconv-stellar"])
         for model in models:
             strength = rec["deconv"] if model == "deconv-obj" else min(rec["deconv"], 0.3)
@@ -779,8 +787,8 @@ def _deconvolve(j: _Job, exe: str | None, current: Path, work: Path, tune: list[
                 j.step(5, "done", f"GraXpert AI {what} deconvolution, strength {strength:.2f}, for stars measured at "
                                   f"{psf} px FWHM{'' if fwhm else ' (typical DWARF value; measuring failed)'}.")
                 return out
-    j.step(5, "skipped", "Skipped: GraXpert's deconvolution models aren't installed (open GraXpert once and run "
-                         "Deconvolution to download them), and other deconvolution does more harm than good on the DWARF's data.")
+    j.step(5, "skipped", "Skipped: this GraXpert's command line has no deconvolution (GraXpert 4.0 dropped it; 3.1 "
+                         "has it), and other deconvolution does more harm than good on the DWARF's data.")
     return current
 
 
@@ -826,8 +834,14 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
         notes.append("removed green (average neutral)")
     elif rec["duo"]:
         notes.append("kept the green, since OIII from the Duo-Band filter is green-blue")
-    own_stretch = any(c["command"] in STRETCHES for c in extra)
-    linear_extra = [c for c in extra if not own_stretch or c["command"] != "satu"]
+    # The plan's own stretch and saturation are left out: on M 45 a plan's linked stretch to a 20% sky replaced
+    # the tuned one. Its other linear-data commands still run.
+    skipped = [c["command"] for c in extra if c["command"] in STRETCHES or c["command"] == "satu"]
+    extra = [c for c in extra if c["command"] not in STRETCHES and c["command"] != "satu"]
+    if skipped:
+        notes.append(f"left out the plan's {', '.join(sorted(set(skipped)))} in favour of the tuned stretch")
+    own_stretch = False
+    linear_extra = extra
 
     def siril(lines: list[str], out_name: str) -> tuple[int, str]:
         fin = work / "overview_stretch.ssf"
@@ -913,8 +927,8 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
     notes += gate
     out = {"linear": str(work / "result_linear.fits"), "folder": str(work), "frames": found["count"],
            "cleanup_bytes": _folder_bytes(proc)}
-    if rec["duo"]:
-        # Duo-Band: Hα/OIII is the natural palette for this filter, so HOO is the main result.
+    if rec["duo"] and _hoo_main(rec):
+        # Duo-Band on emission nebulae: Hα/OIII is the natural palette for this filter, so HOO is the main result.
         hoo, _ = finishing.quality_gate(finishing.hoo(img))
         saved = finishing.save_final(hoo, work / "result_final", header)
         out["natural"] = finishing.save_final(img, work / "result_natural", header)["tif"]
@@ -922,12 +936,21 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
                      "version is saved as result_natural")
     else:
         saved = finishing.save_final(img, work / "result_final", header)
+        if rec["duo"]:
+            notes.append("shot through the Duo-Band filter, which blocks most of the starlight this target shines by, "
+                         "so the natural-colour version is the main result; the Astro filter suits it better next time")
     out.update(final=saved["tif"], files=saved)
     notes.append("saved TIFF (16-bit), PNG, JPG and FITS")
     msg = "; ".join(notes)
     j.outputs["final"] = saved["tif"]
     j.step(8, "done", msg[:1].upper() + msg[1:] + ".")
     return out
+
+
+def _hoo_main(rec: dict) -> bool:
+    """HOO suits gas that glows in Hα and OIII. Reflection nebulae (M 45), galaxies and clusters shine by starlight,
+    so their natural-colour version stays the main result even when shot through the Duo-Band filter."""
+    return not any(w in (rec.get("kind") or "") for w in ("reflection", "galaxy", "cluster"))
 
 
 def _fill_empty(src: Path, dst: Path) -> str:

@@ -270,18 +270,42 @@ def _measure_stars(flat: np.ndarray, noise: float, factor: int, img: LoadedImage
     order = np.argsort(-vals)
     keep = [i for i in order if vals[i] < peak_ceiling][:400]
 
-    rad = 6
+    # Star size is measured on the full-resolution image, not the downsampled one, against each star's own local
+    # sky, from the pixels above half its peak. The old moment fit on the downsampled image let the wings and the
+    # sky noise in and roughly doubled the DWARF's 3-5 px stars (it kept telling you to check focus).
+    full = img.data.mean(axis=2) if img.data.ndim == 3 else img.data
+    fh, fw = full.shape
+    rad = max(6, 3 * factor)
     yy, xx = np.mgrid[-rad:rad + 1, -rad:rad + 1]
+    ring = np.hypot(yy, xx) > rad - 1.5
     rows = []
     for i in keep:
-        y, x = int(ys[i]), int(xs[i])
-        if y < rad or x < rad or y >= h - rad or x >= w - rad:
+        y0s, x0s = int(ys[i]), int(xs[i])
+        fy, fx = y0s * factor + factor // 2, x0s * factor + factor // 2
+        if fy < rad or fx < rad or fy >= fh - rad or fx >= fw - rad:
             continue
-        cut = flat[y - rad:y + rad + 1, x - rad:x + rad + 1]
-        wgt = np.clip(cut - 2 * noise, 0, None)
+        cut = full[fy - rad:fy + rad + 1, fx - rad:fx + rad + 1]
+        py, px = np.unravel_index(int(np.argmax(cut[rad - factor:rad + factor + 1, rad - factor:rad + factor + 1])),
+                                  (2 * factor + 1, 2 * factor + 1))
+        cy0, cx0 = fy - factor + int(py), fx - factor + int(px)
+        if cy0 < rad or cx0 < rad or cy0 >= fh - rad or cx0 >= fw - rad:
+            continue
+        cut = full[cy0 - rad:cy0 + rad + 1, cx0 - rad:cx0 + rad + 1].astype(np.float64)
+        sky = float(np.median(cut[ring]))
+        amp = float(cut[rad, rad]) - sky
+        if amp <= 0:
+            continue
+        above = (cut - sky) >= amp / 2
+        # Only the blob joined to the peak (a neighbour star above half max would inflate it).
+        import cv2
+        _, lab = cv2.connectedComponents(above.astype(np.uint8), connectivity=8)
+        core = lab == lab[rad, rad]
+        area = float(core.sum())
+        if area < 1 or core[0].any() or core[-1].any() or core[:, 0].any() or core[:, -1].any():
+            continue
+        fwhm = 2 * math.sqrt(area / math.pi)
+        wgt = np.where(core, cut - sky, 0.0)
         tot = wgt.sum()
-        if tot <= 0:
-            continue
         cx, cy = (wgt * xx).sum() / tot, (wgt * yy).sum() / tot
         mxx = (wgt * (xx - cx) ** 2).sum() / tot
         myy = (wgt * (yy - cy) ** 2).sum() / tot
@@ -289,9 +313,8 @@ def _measure_stars(flat: np.ndarray, noise: float, factor: int, img: LoadedImage
         tr, det = mxx + myy, mxx * myy - mxy ** 2
         disc = math.sqrt(max(tr * tr / 4 - det, 0))
         l1, l2 = tr / 2 + disc, max(tr / 2 - disc, 1e-6)
-        fwhm = 2.3548 * math.sqrt((l1 + l2) / 2) * factor
         angle = (0.5 * math.degrees(math.atan2(2 * mxy, mxx - myy))) % 180.0
-        rows.append((x, y, fwhm, math.sqrt(l1 / l2), angle, float(flat[y, x])))
+        rows.append((x0s, y0s, fwhm, min(3.0, math.sqrt(l1 / l2)), angle, float(flat[y0s, x0s])))
 
     if not rows:
         return {"detected": count, "note": "Stars found but all saturated or at the edge."}
