@@ -1029,7 +1029,8 @@ def _starnet(j: _Job, src: Path, dst: Path) -> bool:
     if not exe:
         return False
     dst.unlink(missing_ok=True)
-    for args in ([exe, "-i", str(src), "-o", str(dst)], [exe, str(src), str(dst), "256"]):
+    for args in ([exe, "--input", str(src), "--output", str(dst)], [exe, "-i", str(src), "-o", str(dst)],
+                 [exe, str(src), str(dst), "256"]):
         j.run(args, Path(exe).parent, 1800)  # StarNet looks for its weights next to itself
         if dst.exists():
             return True
@@ -1048,9 +1049,16 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
     if rec["stars"] <= 0:
         notes.append("left the stars alone, as they're the subject")
     elif _starnet(j, stretched, work / "result_starless.tif"):
-        img = finishing.reduce_stars(img, rec["stars"], finishing.read_tif(work / "result_starless.tif"))
-        notes.append(f"StarNet separated the stars, which were dimmed by {int(rec['stars'] * 60)}% "
-                     "(the starless image is kept too)")
+        try:
+            starless = finishing.read_tif(work / "result_starless.tif")
+            if starless.shape != img.shape:
+                raise OSError(f"StarNet's image is {starless.shape[1]}×{starless.shape[0]}, not {img.shape[1]}×{img.shape[0]}")
+            img = finishing.reduce_stars(img, rec["stars"], starless)
+            notes.append(f"StarNet separated the stars, which were dimmed by {int(rec['stars'] * 60)}% "
+                         "(the starless image is kept too)")
+        except (OSError, ValueError) as e:  # a star reduction that can't be read mustn't sink the whole run
+            j.log(f"StarNet's output couldn't be used ({e}).")
+            notes.append("stars left as they are: StarNet ran but its output couldn't be read")
     else:  # erosion flattened and fringed the stars in 0.8.0, so without StarNet they're left as they are
         notes.append("stars left as they are: install StarNet++ (Setup links it) for star reduction")
     img, gate = finishing.quality_gate(img)

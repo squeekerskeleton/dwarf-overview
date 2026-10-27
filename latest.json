@@ -1,6 +1,6 @@
 {
-  "version": "0.12.9",
-  "notes": "Software check: StarNet++ only counts as installed when its weights file is next to it (otherwise it says what's missing).",
-  "sha256": "8df283edfbb74a80775f51e04533943ac320d235e6fe3efb5cfdba16291ee069",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.9.zip"
+  "version": "0.12.10",
+  "notes": "StarNet2 fix: its compressed (LZW) TIFFs are now read with OpenCV; if StarNet's output can't be used, star reduction is skipped instead of failing the run.",
+  "sha256": "1c823fadc88e9bef8b077d412626abf5fc7501ee9e830790f3e0637b13dad4ea",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.10.zip"
 }

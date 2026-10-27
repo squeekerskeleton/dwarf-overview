@@ -42,7 +42,15 @@ def write_fits_rgb(path: Path, img, header=None) -> None:
 def read_tif(path: Path):
     np = _np()
     import tifffile
-    img = tifffile.imread(str(path))
+    try:
+        img = tifffile.imread(str(path))
+    except Exception:  # StarNet2 always writes LZW TIFFs, which tifffile can't decode without imagecodecs
+        import cv2
+        img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise OSError(f"Couldn't read {path}")
+        if img.ndim == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGB if img.shape[2] == 4 else cv2.COLOR_BGR2RGB)
     if img.ndim == 3 and img.shape[0] in (3, 4) and img.shape[-1] not in (3, 4):
         img = np.moveaxis(img, 0, -1)
     if img.ndim == 2:
