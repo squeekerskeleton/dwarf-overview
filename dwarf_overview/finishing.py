@@ -212,7 +212,7 @@ def quality_gate(img, tol: float = 0.02) -> tuple:
 IMX678_LUMA = (0.34, 0.48, 0.18)
 
 
-def colour_stretch(img, target_bg: float = 0.12, shadow_sigma: float = 5.5, protect: float = 0.6):
+def colour_stretch(img, target_bg: float = 0.11, shadow_sigma: float = 4.0, protect: float = 0.6):
     """Linear, colour-calibrated RGB -> stretched RGB that keeps the calibrated colour.
 
     Siril's unlinked auto-stretch stretches each channel on its own, which throws away SPCC's white balance (Siril's
@@ -222,8 +222,9 @@ def colour_stretch(img, target_bg: float = 0.12, shadow_sigma: float = 5.5, prot
     sky lands at target_bg. Near the sky the colour is eased toward grey (protect), so background noise doesn't turn
     into colour speckle; stars and nebula keep their full colour.
 
-    shadow_sigma sets the black point that many sky-noise sigmas below the sky. Grain (sky noise / sky level) comes
-    out at about 1/shadow_sigma: 2.8 in 0.11-0.12.2 gave 0.42 on C 33 against 0.16 in the DWARF's own JPG.
+    shadow_sigma sets the black point that many sky-noise sigmas below the sky: higher means less grain but a
+    flatter image. On C 33, 2.8 gave grain (sky noise / sky) 0.41 and 5.5 plus full sky smoothing looked flat and
+    plasticky at 0.05; the DWARF's own JPG is 0.16. 4.0 sits between, and lift_faint brings the contrast back.
     """
     np = _np()
     x = np.clip(np.asarray(img, dtype="float32"), 0, None)
@@ -313,7 +314,7 @@ def cap_star_colour(img, mask, cap: float = 0.25):
     return np.clip(lum[..., None] + chroma * k[..., None], 0, 1).astype("float32")
 
 
-def sky_smooth(img, stars=None, sigma: float = 1.2):
+def sky_smooth(img, stars=None, sigma: float = 1.2, amount: float = 1.0):
     """A gentle brightness-only smoothing of the faint sky after the stretch: full strength at the sky level,
     fading out by a few noise levels above it, never on stars. Nebula detail and stars stay sharp."""
     import cv2
@@ -322,12 +323,64 @@ def sky_smooth(img, stars=None, sigma: float = 1.2):
     lum = (img @ w).astype("float32")
     sky = float(np.median(lum))
     noise = 1.4826 * float(np.median(np.abs(lum - sky)))
-    weight = np.clip(1 - (lum - sky) / max(1e-6, 4 * noise), 0, 1)
+    weight = amount * np.clip(1 - (lum - sky) / max(1e-6, 4 * noise), 0, 1)
     if stars is not None:
         weight = weight * (1 - stars)
     smooth = cv2.GaussianBlur(lum, (0, 0), sigma)
     new = lum + weight * (smooth - lum)
     return np.clip(img + (new - lum)[..., None], 0, 1).astype("float32")
+
+
+def grain(img) -> float:
+    """Sky noise ÷ sky level of a stretched image (C 33: 0.41 in 0.12.2, 0.05 in 0.12.3, DWARF's JPG 0.16)."""
+    q = quality(img)
+    return float(sum(q["noise"]) / max(1e-6, sum(q["sky"])))
+
+
+def smooth_to_grain(img, stars=None, target: float = 0.18):
+    """Smooth the faint sky only as far as a natural-looking grain (target = sky noise ÷ sky level). Returns
+    (image, grain before, grain after). Already below the target: left as it is."""
+    g0 = grain(img)
+    if g0 <= target:
+        return img, g0, g0
+    best = None
+    for sigma in (1.0, 1.5, 2.0):
+        lo, hi = 0.0, 1.0
+        for _ in range(7):
+            mid = (lo + hi) / 2
+            if grain(sky_smooth(img, stars, sigma, mid)) > target:
+                lo = mid
+            else:
+                hi = mid
+        out = sky_smooth(img, stars, sigma, hi)
+        g1 = grain(out)
+        best = (out, g0, g1)
+        if g1 <= target * 1.1:
+            break
+    return best
+
+
+def lift_faint(img, stars=None, gain: float = 1.6):
+    """Contrast for the faint nebula without lifting the sky's noise: brightness a few noise levels above the sky
+    is pushed up (slope `gain` just above the sky, easing to none at white), the sky itself and the stars untouched.
+    Colour ratios are kept. 0.12.3's gentle stretch left C 33's filaments 40-60% dimmer than 0.11.1."""
+    np = _np()
+    w = np.array(IMX678_LUMA, dtype="float32")
+    lum = (img @ w).astype("float32")
+    sky = float(np.median(lum))
+    noise = 1.4826 * float(np.median(np.abs(lum - sky)))
+    t = np.clip(lum - sky, 0, None)
+    span = max(1e-6, 1 - sky)
+    curved = sky + t * gain / (1 + (gain - 1) * t / span)
+    ramp = np.clip((lum - sky - 2 * noise) / max(1e-6, 4 * noise), 0, 1)
+    if stars is not None:
+        ramp = ramp * (1 - stars)
+    new = np.where(lum > sky, lum + ramp * (curved - lum), lum)
+    ratio = new / np.maximum(lum, 1e-6)
+    out = img * ratio[..., None]
+    peak = out.max(axis=2, keepdims=True)
+    out = np.where(peak > 1, out / np.maximum(peak, 1e-9), out)
+    return np.clip(out, 0, 1).astype("float32")
 
 
 def saturation(img, amount: float = 0.35, protect_bg: bool = True, stars=None):

@@ -998,18 +998,23 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
         siril([], "result_linear")  # keep result_linear.fits for the record, as before
     img, header = finishing.read_fits_rgb(source)
     # Duo-Band nebulae are mostly faint gas: a slightly brighter sky shows more of it. Broadband stays darker.
-    target = 0.14 if rec["duo"] else 0.12
+    target = 0.12 if rec["duo"] else 0.11
     img, info = finishing.colour_stretch(img, target_bg=target)
     stars = finishing.star_mask(img)
     img = finishing.cap_star_colour(finishing.saturation(img, 0.35, stars=stars), stars)
-    img = finishing.sky_smooth(img, stars)
+    img = finishing.lift_faint(img, stars)
+    # Smooth the sky only as far as a natural grain (about 0.18 of the sky level): 0.12.3 smoothed C 33 to 0.05,
+    # which looked plasticky.
+    img, g0, g1 = finishing.smooth_to_grain(img, stars, 0.18)
     finishing.write_fits_rgb(work / "result_stretched.fits", img, header)
     import tifffile
     import numpy as np
     tifffile.imwrite(str(out), (np.clip(img, 0, 1) * 65535 + 0.5).astype("uint16"), photometric="rgb")
     notes.append(f"colour-keeping stretch to a {int(target * 100)}% sky (brightness stretched, colour ratios kept, "
                  "sky noise kept grey); saturation +35% on the subject, not the sky or the stars; star colour capped "
-                 "so stars keep a tint instead of turning into red or cyan discs; faint sky smoothed (brightness only)")
+                 "so stars keep a tint instead of turning into red or cyan discs; faint nebula lifted above the sky; "
+                 + (f"sky grain {g0:.2f} smoothed to {g1:.2f} of the sky level" if g1 < g0 else
+                    f"sky grain {g0:.2f} of the sky level, left as it is"))
     msg = "; ".join(notes)
     j.outputs["stretched"] = str(out)
     j.step(7, "done", msg[:1].upper() + msg[1:] + ".")
