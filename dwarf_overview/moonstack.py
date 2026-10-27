@@ -391,8 +391,8 @@ def _screen(j, sources: list, ranked: dict, each_frame, trial: int = 20) -> tupl
         for img in imgs[1:]:
             if img.shape != imgs[0].shape:
                 img = cv2.resize(img, imgs[0].shape[1::-1], interpolation=cv2.INTER_CUBIC)
-            acc += cv2.warpAffine(img, _global_warp(r_small, _gray_small(img)[0], sc), imgs[0].shape[1::-1],
-                                  flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
+            acc += np.clip(cv2.warpAffine(img, _global_warp(r_small, _gray_small(img)[0], sc), imgs[0].shape[1::-1],
+                                          flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE), 0, None)
         stacks[si] = (acc / len(imgs)).astype("float32")
     order = sorted(stacks, key=lambda si: -_sharpness(stacks[si]))
     first = stacks[order[0]]
@@ -406,8 +406,8 @@ def _screen(j, sources: list, ranked: dict, each_frame, trial: int = 20) -> tupl
         img = stacks[si]
         if img.shape != first.shape:
             img = cv2.resize(img, first.shape[1::-1], interpolation=cv2.INTER_CUBIC)
-        img = cv2.warpAffine(img, _global_warp(f_small, _gray_small(img)[0], f_sc), first.shape[1::-1],
-                             flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
+        img = np.clip(cv2.warpAffine(img, _global_warp(f_small, _gray_small(img)[0], f_sc), first.shape[1::-1],
+                                     flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE), 0, None)
         img = _tone_match(img, f_g, f_mask)
         n = float(len(ranked[si]))
         trial_s = _sharpness(((acc + img * n) / (wsum + n)).astype("float32"))
@@ -509,23 +509,26 @@ def _run(j, items, source, work, date) -> None:
 
 def _tone_match(img, ref_l, mask):
     """Give a frame the reference's tones on the disc (quantile matching). Raw FITS frames are linear and the
-    videos are gamma-encoded, and exposures differ, so this is what lets them be averaged together."""
+    videos are gamma-encoded, and exposures differ, so this is what lets them be averaged together. Cubic warps
+    leave slightly negative pixels at the limb; 0.16.0 divided by them and blew the stack up (gains to 1e9)."""
     import numpy as np
+    img = np.clip(img, 0, None)
     lum = img.mean(axis=2)
-    sel = mask & (lum > 0)
+    sel = mask & (lum > 0.02)
     if sel.sum() < 1000:
         return img
     q = np.linspace(0.5, 99.8, 64)
     a, b = np.percentile(lum[sel], q), np.percentile(ref_l[sel], q)
     a = np.maximum.accumulate(a + np.arange(64) * 1e-7)  # strictly increasing for interp
-    new = np.interp(lum, a, b, left=None, right=None)
+    new = np.interp(lum, a, b)
     lo = lum < a[0]  # darker than the disc (sky, shadowed edge): scale down towards black, never clamp up
     new[lo] = lum[lo] * (b[0] / max(1e-6, a[0]))
     hi = lum > a[-1]  # beyond the matched range: carry on with the last slope
     if hi.any():
-        slope = (b[-1] - b[-8]) / max(1e-6, a[-1] - a[-8])
+        slope = float(np.clip((b[-1] - b[-8]) / max(1.0 / 255, a[-1] - a[-8]), 0.5, 1.5))
         new[hi] = b[-1] + (lum[hi] - a[-1]) * slope
-    return img * (new / np.maximum(lum, 1e-6))[..., None]
+    gain = np.where(lum > 1e-3, new / np.maximum(lum, 1e-3), 1.0)  # never divide by about zero
+    return img * np.clip(gain, 0, 4)[..., None]
 
 
 def _pipeline(j, items, source, work: Path, date: str) -> dict:
@@ -633,8 +636,8 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
         for img in refs.values():
             if sources[ref_f[1]]["up"] > 1:
                 img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-            acc_r += cv2.warpAffine(img, _global_warp(ref_small, _gray_small(img)[0], scale), ref.shape[1::-1],
-                                    flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
+            acc_r += np.clip(cv2.warpAffine(img, _global_warp(ref_small, _gray_small(img)[0], scale), ref.shape[1::-1],
+                                            flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE), 0, None)
         ref = (acc_r / (len(refs) + 1)).astype("float32")
         ref_small, scale = _gray_small(ref)
     ref_g = ref.mean(axis=2).astype("float32")
@@ -658,11 +661,13 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
             img = cv2.resize(img, (w, h), interpolation=cv2.INTER_CUBIC)
         small, _ = _gray_small(img)
         warp = _global_warp(ref_small, small, scale)
-        img = cv2.warpAffine(img, warp, (w, h), flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
-        img = _tone_match(img, ref_g, disc_mask)
+        img = np.clip(cv2.warpAffine(img, warp, (w, h), flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP,
+                                     borderMode=cv2.BORDER_REPLICATE), 0, None)
+        if si != ref_f[1]:  # frames of the reference's own source share its exposure and gamma
+            img = _tone_match(img, ref_g, disc_mask)
         lm = _local_map(ref_g, img.mean(axis=2).astype("float32"), ref_mask)
         if lm is not None:
-            img = cv2.remap(img, lm[0], lm[1], cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+            img = np.clip(cv2.remap(img, lm[0], lm[1], cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE), 0, None)
         wgt = src["weight"] * score_of[(si, k)]  # sharper frames count for more
         acc += img * wgt
         wsum += wgt
@@ -709,8 +714,9 @@ def _sharpen(img, linear: bool, up: int):
         means = np.array([x[..., c][high].mean() for c in range(3)])
         x = x * (means.mean() / np.maximum(means, 1e-6))
     sky = float(np.percentile(lum0[~lit], 50)) if (~lit).any() else 0.0
-    top = float(np.percentile(x[lit], 99.9)) if lit.any() else float(np.percentile(x, 99.95))
-    x = np.clip((x - sky) / max(1e-6, top - sky), 0, None).astype("float32")
+    xc = np.clip(x, 0, 1)  # a few stray spikes mustn't set the white point
+    top = float(np.percentile(xc[lit], 99.9)) if lit.any() else float(np.percentile(xc, 99.95))
+    x = np.clip((x - sky) / max(1e-6, top - sky), 0, 1.5).astype("float32")
     base = x.copy()
     lum = x.mean(axis=2).astype("float32")
     den = cv2.bilateralFilter(lum, 0, 0.03, 1.5 * up)
@@ -740,7 +746,8 @@ def _centre(img):
         s = min(OUT_W / w, OUT_H / h)
         img = cv2.resize(img, (round(w * s), round(h * s)), interpolation=cv2.INTER_AREA)
         h, w = img.shape[:2]
-    m = img.mean(axis=2) > 0.1
+    lum = img.mean(axis=2)
+    m = lum > max(1e-4, float(np.percentile(lum, 99.5)) * 0.25)  # the disc, whatever its brightness
     ys, xs = np.nonzero(m)
     cy, cx = (float(ys.mean()), float(xs.mean())) if ys.size else (h / 2, w / 2)
     canvas = np.zeros((OUT_H, OUT_W, 3), "float32")

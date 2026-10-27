@@ -1,6 +1,6 @@
 {
-  "version": "0.16.0",
-  "notes": "Moon stack tuned on real DWARF 3 video: best 5% of frames, a reference averaged from the 8 sharpest, finer patch alignment, sharper frames weighted higher, and a new finish (highland white balance, gentle denoise, Richardson-Lucy, three-scale detail) with about 3x the fine detail of an AutoStakkert stack. Videos or photo sessions that would blur the stack are now left out automatically.",
-  "sha256": "c354d45bc7192d7ba82c1e22bea07a7775401462923d111464ee4207696183de",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.16.0.zip"
+  "version": "0.16.1",
+  "notes": "Moon stack: fixes a nearly black result (tone matching divided by slightly negative pixels left by the alignment); the Moon is found and centred whatever its brightness.",
+  "sha256": "84f0b83f9dc5d9db7f8fa17f73134a2576f0d0ceab71843afed1094cb6873d9c",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.16.1.zip"
 }
