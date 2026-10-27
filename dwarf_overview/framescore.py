@@ -25,8 +25,10 @@ def score(path: Path, max_stars: int = 150) -> dict | None:
         raw = np.asarray(fits.getdata(path), dtype="float32")
     except (OSError, ValueError, TypeError):
         return None
+    scale = 2  # Bayer frames are measured at half size
     if raw.ndim == 3:
-        lum = raw.mean(axis=0)
+        lum = raw.mean(axis=0) if raw.shape[0] in (3, 4) else raw.mean(axis=2)
+        scale = 1
     else:
         h, w = (raw.shape[0] // 2) * 2, (raw.shape[1] // 2) * 2
         r = raw[:h, :w]
@@ -56,7 +58,7 @@ def score(path: Path, max_stars: int = 150) -> dict | None:
         ev = np.linalg.eigvalsh([[vy, cov], [cov, vx]])
         if ev[0] <= 0:
             continue
-        fwhm.append(2.355 * np.sqrt(ev.mean()) * 2)  # back to full-size pixels
+        fwhm.append(2.355 * np.sqrt(ev.mean()) * scale)  # in full-size pixels
         rnd.append(float(np.sqrt(ev[0] / ev[1])))
         if len(fwhm) >= max_stars:
             break

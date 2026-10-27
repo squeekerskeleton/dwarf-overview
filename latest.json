@@ -1,6 +1,6 @@
 {
-  "version": "0.10.1",
-  "notes": "Moon: Auto-stack button on the Assess tab for any Moon photo or video; videos and raw sessions from the same night stack together; tick boxes per shot and an extra-video path; fixed a dark-stack bug and a memory crash on 4K videos.",
-  "sha256": "681467b72f804ea398e50547e6978fea67d8ca130a5731bda8418f1535953cdd",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.10.1.zip"
+  "version": "0.11.0",
+  "notes": "Processing review: colour-keeping stretch (keeps SPCC colour), GraXpert deconvolution now gets the measured star size and uses the object model, SPCC with the DWARF 3's UV/IR filter and correct Duo-Band passbands, satellite-proof rejection for big sessions, smoother background model for galaxies.",
+  "sha256": "9330be213347b2e2daf0d98fd8a9d5bfe1094acdf37037a15c203710a996550f",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.11.0.zip"
 }

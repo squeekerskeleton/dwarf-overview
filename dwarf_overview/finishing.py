@@ -197,3 +197,73 @@ def quality_gate(img) -> tuple:
     after = quality(img)
     notes.append(f"check: background {after['spread'] * 100:.1f}% off neutral, red noise {after['red_vs_green']:.1f}× green")
     return img, notes
+
+
+# Luminance weights for the DWARF 3's Sony IMX678 (its relative red/green/blue response), so the brightness the
+# stretch works on matches what the sensor saw rather than a generic Rec.709 mix.
+IMX678_LUMA = (0.34, 0.48, 0.18)
+
+
+def colour_stretch(img, target_bg: float = 0.12, shadow_sigma: float = 2.8, protect: float = 0.6):
+    """Linear, colour-calibrated RGB -> stretched RGB that keeps the calibrated colour.
+
+    Siril's unlinked auto-stretch stretches each channel on its own, which throws away SPCC's white balance (Siril's
+    own docs say not to use it after colour calibration); a linked one keeps the balance but washes colour out of
+    everything bright. Here only the brightness is stretched, with an inverse hyperbolic sine (strong in the faint
+    nebula, gentle on stars), and every pixel keeps its red:green:blue ratios. The stretch strength is solved so the
+    sky lands at target_bg. Near the sky the colour is eased toward grey (protect), so background noise doesn't turn
+    into colour speckle; stars and nebula keep their full colour.
+    """
+    np = _np()
+    x = np.clip(np.asarray(img, dtype="float32"), 0, None)
+    w = np.array(IMX678_LUMA, dtype="float32")
+    lum = x @ w
+    step = max(1, lum.size // 400_000)
+    sample = lum.reshape(-1)[::step]
+    med = float(np.median(sample))
+    low = sample[sample <= med]
+    sigma = 1.4826 * float(np.median(np.abs(low - np.median(low)))) if low.size else 0.0
+    black = max(0.0, med - shadow_sigma * max(sigma, 1e-7))
+    top = float(np.percentile(sample, 99.995))
+    if lum.size:
+        top = max(top, float(lum.max()) * 0.98)
+    scale = 1.0 / max(1e-9, top - black)
+    xs = np.clip((x - black) * scale, 0, None)
+    ls = np.clip((lum - black) * scale, 0, 1)
+    m = min(0.5, max(1e-6, (med - black) * scale))
+
+    def curve(v, d):
+        return np.arcsinh(d * v) / np.arcsinh(d)
+    lo_d, hi_d = 0.0, 7.0  # solve log10(D) so the sky's median lands on target_bg
+    for _ in range(50):
+        mid = (lo_d + hi_d) / 2
+        if curve(m, 10 ** mid) < target_bg:
+            lo_d = mid
+        else:
+            hi_d = mid
+    d = 10 ** ((lo_d + hi_d) / 2)
+    new_l = curve(ls, d)
+    ratio = new_l / np.maximum(ls, 1e-9)
+    out = xs * ratio[..., None]
+    # Keep hue where a colour channel would pass white: scale the pixel down rather than clip one channel.
+    peak = out.max(axis=2, keepdims=True)
+    out = np.where(peak > 1, out / np.maximum(peak, 1e-9), out)
+    if protect > 0:
+        grey = new_l[..., None]
+        # Weight 1 at the sky level, fading to 0 by about three times the sky brightness.
+        near_sky = np.clip(1 - (new_l - target_bg) / max(1e-6, 2 * target_bg), 0, 1)[..., None] * protect
+        out = out * (1 - near_sky) + grey * near_sky
+    return np.clip(out, 0, 1).astype("float32"), {"black": black, "D": float(d), "sky_in": med}
+
+
+def saturation(img, amount: float = 0.35, protect_bg: bool = True):
+    """Saturation boost in a hue-preserving way (scale the distance from each pixel's grey), left off the sky."""
+    np = _np()
+    lum = img @ np.array(IMX678_LUMA, dtype="float32")
+    gain = 1 + amount
+    if protect_bg:
+        sky = float(np.median(lum))
+        noise = 1.4826 * float(np.median(np.abs(lum - sky)))
+        gain = 1 + amount * np.clip((lum - sky - noise) / max(1e-6, 3 * noise), 0, 1)[..., None]
+    out = lum[..., None] + (img - lum[..., None]) * gain
+    return np.clip(out, 0, 1).astype("float32")

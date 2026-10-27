@@ -150,6 +150,7 @@ def _plan_settings(a: dict) -> dict:
             out["roundness"] = min(0.95, max(0.3, float(m.group(1))))
         if "rejection" in low and (m := re.search(r"sigma\s*([\d.]+)\s*/\s*([\d.]+)", low)):
             out["sigma_low"], out["sigma_high"] = float(m.group(1)), float(m.group(2))
+            out["_from_plan"].add("sigma")
         if "crop" in low and (m := re.findall(r"(\d{2,3})\s*(?:to|-)?\s*(\d{2,3})?\s*px", low)):
             nums = [int(x) for x in m[0] if x]
             out["crop_px"] = min(300, max(0, sum(nums) // len(nums)))
@@ -286,7 +287,11 @@ STEPS = ["Find and copy the raw frames and the DWARF's matching dark",
 # Steps of runs saved by older versions, so LAST SESSION still recognises them.
 OLD_LABELS = {"Find and copy the raw frames": 0, "Siril: debayer, register, select frames, stack": 1,
               "Crop the stacking edges": 2}
-DUO_BAND = {"rwl": 656.28, "gwl": 500.7, "bwl": 500.7, "bw": 15}
+# DWARF 3 Duo-Band passbands: Hα about 18 nm and OIII about 30 nm wide (the values the Siril community's smart-telescope
+# preprocessing script uses for the DWARF 3, and what Siril's measured curve of the sister DWARF Mini filter shows).
+DUO_BAND = {"rwl": 656.28, "rbw": 18, "gwl": 500.7, "gbw": 30, "bwl": 500.7, "bbw": 30}
+# The DWARF 3's "Astro" filter is a UV/IR cut; Siril's SPCC database names it like this.
+ASTRO_FILTER = "UV/IR Block"
 DWARF3_SENSOR = "Sony IMX678"
 
 
@@ -442,7 +447,9 @@ def _recommend(plan: dict, a: dict, found: dict, shot: dict) -> dict:
         r["stars"] = 0.4
     else:
         r["stars"] = 0.7  # nebulae: let the gas show through the star field
-    r["deconv"] = 0.3  # gentle: the DWARF's 2.75"/px is undersampled, so there's little to gain and noise to lose
+    # Object deconvolution at half strength: the DWARF's 2.75"/px is undersampled, so there's detail to gain in
+    # the nebula but not much in the stars, and too much brings out noise.
+    r["deconv"] = 0.5
     return r
 
 
@@ -525,7 +532,7 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
 
     current = cropped
     # 4. GraXpert background extraction
-    current = carry(3, "graxpert", current, lambda c: _graxpert(j, gx, exe, c, work, t) if exe else
+    current = carry(3, "graxpert", current, lambda c: _graxpert(j, gx, exe, c, work, t, rec) if exe else
                     (j.step(3, "skipped", "GraXpert wasn't found (set it in Settings), so background extraction was skipped.") or c))
     # 5. plate solve + colour
     current = carry(4, "calibrated", current, lambda c: _calibrate(j, plan, shot, c, work, tune, rec, v14))
@@ -588,9 +595,10 @@ def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str], dark:
     # The DWARF is on an alt-az mount, so the sky turns in the frame during a session: the area every frame
     # shares can shrink to a strip over a few hours. Full-frame mode keeps the reference frame's whole field.
     framing = "current" if full else "min"
+    found_n = sum(1 for f in (work / "lights").iterdir() if FRAME.search(f.name))
     j.step(1, "running", f"{'Dark-subtracting with cosmetic correction, then k' if dark else 'K'}eeping the sharpest "
                          f"{plan['keep_percent']}% of frames that are also among the roundest 80%; middle frame as reference; {'full original frame size' if full else 'cropped to the area all frames share'}; "
-                         f"Winsorized rejection {plan['sigma_low']}/{plan['sigma_high']}"
+                         f"{'Generalized ESD rejection (catches satellite trails)' if found_n >= 50 and 'sigma' not in plan['_from_plan'] else 'Winsorized rejection ' + str(plan['sigma_low']) + '/' + str(plan['sigma_high'])}"
                          f"{', frames weighted by their sharpness' if v14 else ''}.")
     for use_dark in ([True, False] if dark else [False]):
         if proc.exists():
@@ -600,6 +608,10 @@ def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str], dark:
                  "calibrate light -dark=../master_dark.fits -cc=dark -cfa -debayer"] if use_dark else
                 ["convert light -debayer -out=../process", "cd ../process"])
         n = sum(1 for f in (work / "lights").iterdir() if FRAME.search(f.name))
+        # Big sessions: the Generalized ESD test (up to 30% outliers per pixel, 5% significance) is what Siril
+        # recommends past about 50 frames; it catches satellite and plane trails that Winsorized 3/3 lets through.
+        rejection = (f"rej g 0.3 0.05" if n >= 50 and "sigma" not in plan["_from_plan"]
+                     else f"rej w {plan['sigma_low']} {plan['sigma_high']}")
         script = work / "overview_stack.ssf"
         script.write_text("\n".join([
             "# Written by DWARF Post-Processing Hub: restack with frame selection",
@@ -609,7 +621,7 @@ def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str], dark:
             f"register {seq} -2pass",
             f"seqapplyreg {seq} -filter-wfwhm={plan['keep_percent']}% -filter-round=80% -framing={framing}",
             "set32bits",
-            f"stack r_{seq} rej w {plan['sigma_low']} {plan['sigma_high']} -norm=addscale -output_norm"
+            f"stack r_{seq} {rejection} -norm=addscale -output_norm"
             f"{' -weight=wfwhm' if v14 else ''} -32b -out=../result_stack",
             ""]), encoding="utf-8")
         (work / "result_stack.fits").unlink(missing_ok=True)
@@ -638,10 +650,13 @@ def _gx_run(j: _Job, exe: str, current: Path, work: Path, t: dict, cmd: list[str
     return (Path(out) if code == 0 and out else None), tail
 
 
-def _graxpert(j: _Job, gx: dict, exe: str, current: Path, work: Path, t: dict) -> Path:
+def _graxpert(j: _Job, gx: dict, exe: str, current: Path, work: Path, t: dict, rec: dict | None = None) -> Path:
     j.step(3, "running")
     corr = gx.get("correction") or "Subtraction"
-    smooth = float(gx.get("smoothing") if gx.get("smoothing") is not None else 0.2)
+    # Galaxies like M 31 fill much of the DWARF's 2.9°×1.6° field, and a rough background model eats their faint
+    # outer halo; a smoother model leaves it. Nebulae and clusters take the usual light smoothing.
+    default = 0.5 if "galaxy" in ((rec or {}).get("kind") or "") else 0.2
+    smooth = float(gx.get("smoothing") if gx.get("smoothing") is not None else default)
     out, tail = _gx_run(j, exe, current, work, t, ["background-extraction", "-correction", corr,
                                                    "-smoothing", f"{smooth:.2f}"], "result_bg", 3)
     if not out:
@@ -712,12 +727,15 @@ def _calibrate(j: _Job, plan: dict, shot: dict, current: Path, work: Path, tune:
     if v14:
         sensor = f'"-oscsensor={DWARF3_SENSOR}"'
         if rec["duo"]:
-            narrow = (f"spcc -narrowband -rwl={nb['rwl']} -rbw={nb['bw']} -gwl={nb['gwl']} -gbw={nb['bw']} "
-                      f"-bwl={nb['bwl']} -bbw={nb['bw']}")
+            narrow = (f"spcc -narrowband -rwl={nb['rwl']} -rbw={nb['rbw']} -gwl={nb['gwl']} -gbw={nb['gbw']} "
+                      f"-bwl={nb['bwl']} -bbw={nb['bbw']}")
             tries += [(f"{narrow} {sensor}", "SPCC in narrowband mode (Hα 656 nm, OIII 501 nm)"),
                       (narrow, "SPCC in narrowband mode (Hα 656 nm, OIII 501 nm)")]
         else:
-            tries += [(f"spcc {sensor}", "SPCC with the DWARF 3's sensor"), ("spcc", "SPCC")]
+            # Without -oscfilter Siril reuses whatever filter was last picked in its SPCC window.
+            full = f'spcc {sensor} "-oscfilter={ASTRO_FILTER}" "-whiteref=Average Spiral Galaxy"'
+            tries += [(full, "SPCC with the DWARF 3's sensor and UV/IR-cut filter"),
+                      (f"spcc {sensor}", "SPCC with the DWARF 3's sensor"), ("spcc", "SPCC")]
     tries.append(("pcc", "photometric colour calibration (PCC)"))
     for cmd, label in tries:
         ok, tail = _siril_try(j, work, tune, ['load "result_solved"', cmd], "result_calibrated", "colour")
@@ -734,18 +752,35 @@ def _calibrate(j: _Job, plan: dict, shot: dict, current: Path, work: Path, tune:
 
 
 def _deconvolve(j: _Job, exe: str | None, current: Path, work: Path, tune: list[str], t: dict, rec: dict) -> Path:
-    """Only GraXpert's AI stellar deconvolution, and only when its model is there. Siril's Richardson-Lucy was
-    tried in 0.8.0: on the DWARF's undersampled data it barely tightened stars (2.53 to 2.47 px) and added noise."""
+    """GraXpert's AI deconvolution, given the stack's measured star size. Siril's Richardson-Lucy was tried in
+    0.8.0: on the DWARF's undersampled data it barely tightened stars (2.53 to 2.47 px) and added noise.
+    GraXpert's -psfsize is the FWHM in pixels; left out, it falls back to 0.3 px, which asks the model for almost
+    nothing, so it's always measured and passed. Nebulae and galaxies get the object model (sharpens structure,
+    leaves stars), clusters the stellar one."""
     j.step(5, "running")
     if exe:
-        out, _ = _gx_run(j, exe, current, work, t, ["deconv-stellar", "-strength", f"{rec['deconv']:.2f}"],
-                         "result_deconv", 5, batch=True, timeout=1800)
-        if out:
-            j.outputs["deconvolved"] = str(out)
-            j.step(5, "done", f"GraXpert AI stellar deconvolution, strength {rec['deconv']:.2f}.")
-            return out
-    j.step(5, "skipped", "Skipped: GraXpert's deconvolution model isn't installed, and other deconvolution does more "
-                         "harm than good on the DWARF's data.")
+        fwhm = None
+        try:
+            from . import framescore
+            sc = framescore.score(current)
+            if sc and sc["fwhm"] < 20:
+                fwhm = sc["fwhm"]
+        except Exception:  # measuring is a nicety; GraXpert still runs with a typical DWARF value
+            pass
+        psf = round(min(8.0, max(1.5, fwhm or 2.8)), 2)
+        models = (["deconv-stellar", "deconv-obj"] if "cluster" in rec["kind"] else ["deconv-obj", "deconv-stellar"])
+        for model in models:
+            strength = rec["deconv"] if model == "deconv-obj" else min(rec["deconv"], 0.3)
+            out, _ = _gx_run(j, exe, current, work, t, [model, "-strength", f"{strength:.2f}", "-psfsize", f"{psf}"],
+                             "result_deconv", 5, batch=True, timeout=1800)
+            if out:
+                j.outputs["deconvolved"] = str(out)
+                what = "object (nebula and galaxy detail)" if model == "deconv-obj" else "stellar (star cores)"
+                j.step(5, "done", f"GraXpert AI {what} deconvolution, strength {strength:.2f}, for stars measured at "
+                                  f"{psf} px FWHM{'' if fwhm else ' (typical DWARF value; measuring failed)'}.")
+                return out
+    j.step(5, "skipped", "Skipped: GraXpert's deconvolution models aren't installed (open GraXpert once and run "
+                         "Deconvolution to download them), and other deconvolution does more harm than good on the DWARF's data.")
     return current
 
 
@@ -773,49 +808,72 @@ def _denoise(j: _Job, exe: str | None, current: Path, work: Path, tune: list[str
     return final
 
 
+STRETCHES = ("autostretch", "asinh", "ght", "autoghs", "modasinh", "mtf", "linstretch")
+
+
 def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list[str], rec: dict, calibrated: bool) -> Path:
+    """Linear to display. The plan's own Siril commands run first (on linear data); then, unless the plan brings
+    its own stretch, a colour-keeping stretch (finishing.colour_stretch) and a saturation boost that leaves the
+    sky alone. 0.9.0 used Siril's unlinked auto-stretch here, which Siril's docs say undoes colour calibration."""
     j.step(7, "running")
     handled = {"platesolve", "pcc", "spcc", "crop", "save", "savetif", "rmgreen", "subsky", "denoise", "starnet", "rl"}
-    lines = ["requires 1.2.0", *tune, f'load "{current.name}"', "save result_linear"]
+    extra = [c for c in a["assessment"].get("siril_script", []) if c.get("command") not in handled
+             and tools._ARG_OK.match((c.get("args") or "").strip())]
     notes = []
-    if plan["rmgreen"] and not rec["duo"]:
-        lines.append("rmgreen 0")
+    pre = []
+    if plan["rmgreen"] and not rec["duo"] and not calibrated:
+        pre.append("rmgreen 0")  # after SPCC/PCC the green is already right; SCNR would only shift the balance
         notes.append("removed green (average neutral)")
     elif rec["duo"]:
         notes.append("kept the green, since OIII from the Duo-Band filter is green-blue")
-    extra = [c for c in a["assessment"].get("siril_script", []) if c.get("command") not in handled
-             and tools._ARG_OK.match((c.get("args") or "").strip())]
-    for c in extra:
-        lines.append(f"{c['command']} {(c.get('args') or '').strip()}".rstrip())
-    # Unlinked (the background is already neutral), to a darker 11% background so the nebula has contrast.
-    stretch = ["autostretch -2.8 0.11"]
-    if not any(c["command"] in ("autostretch", "asinh", "ght") for c in extra):
-        lines += stretch
-        notes.append("auto-stretch to an 11% background")
-    if not any(c["command"] == "satu" for c in extra):
-        lines.append("satu 0.4 1.5")  # after the stretch, leaving the background alone
-        notes.append("saturation +0.4 on the subject, not the background")
-    lines += ["save result_stretched", "savetif result_stretched", ""]
-    fin = work / "overview_stretch.ssf"
-    fin.write_text("\n".join(lines), encoding="utf-8")
-    code, tail = j.run(_siril_args(fin, work), work, 3600)
+    own_stretch = any(c["command"] in STRETCHES for c in extra)
+    linear_extra = [c for c in extra if not own_stretch or c["command"] != "satu"]
+
+    def siril(lines: list[str], out_name: str) -> tuple[int, str]:
+        fin = work / "overview_stretch.ssf"
+        fin.write_text("\n".join(["requires 1.2.0", *tune, "set32bits", f'load "{current.name}"', "save result_linear", *lines,
+                                  f"save {out_name}", *([f"savetif {out_name}"] if out_name == "result_stretched" else []),
+                                  ""]), encoding="utf-8")
+        return j.run(_siril_args(fin, work), work, 3600)
+
     out = work / "result_stretched.tif"
-    if (code != 0 or not out.exists()) and extra:
-        # One of the plan's own commands didn't suit this Siril; use the standard stretch instead.
-        j.log("A plan command failed in Siril; stretching with the standard settings instead.")
-        keep = [ln for ln in lines if not any(ln.startswith(c["command"] + " ") or ln == c["command"] for c in extra)]
-        if not any(ln.startswith("autostretch") for ln in keep):
-            keep.insert(keep.index("save result_stretched"), stretch[0])
-        if "satu 0.4 1.5" not in keep:
-            keep.insert(keep.index("save result_stretched"), "satu 0.4 1.5")
-        fin.write_text("\n".join(keep), encoding="utf-8")
-        notes.append(f"the plan's {', '.join(c['command'] for c in extra)} didn't run in Siril, so it used the standard stretch")
-        extra = []
-        code, tail = j.run(_siril_args(fin, work), work, 3600)
-    if code != 0 or not out.exists():
-        raise ProcessError("Siril couldn't stretch the image:\n" + tail[-1200:])
-    if extra:
-        notes.append("ran the plan's " + ", ".join(c["command"] for c in extra))
+    for f in (out, work / "result_stretched.fits"):
+        f.unlink(missing_ok=True)
+    cmds = pre + [f"{c['command']} {(c.get('args') or '').strip()}".rstrip() for c in linear_extra]
+    if own_stretch:
+        code, tail = siril(cmds, "result_stretched")
+        if code == 0 and out.exists():
+            notes.append("ran the plan's " + ", ".join(c["command"] for c in linear_extra))
+            msg = "; ".join(notes)
+            j.outputs["stretched"] = str(out)
+            j.step(7, "done", msg[:1].upper() + msg[1:] + ".")
+            return out
+        j.log("The plan's stretch didn't run in Siril; using the standard stretch instead.")
+        notes.append("the plan's own stretch didn't run in Siril, so it used the standard one")
+        cmds, linear_extra = pre, []
+    source = current
+    if cmds:
+        code, tail = siril(cmds, "result_prestretch")
+        if code == 0 and (work / "result_prestretch.fits").exists():
+            source = work / "result_prestretch.fits"
+            if linear_extra:
+                notes.append("ran the plan's " + ", ".join(c["command"] for c in linear_extra))
+        else:
+            j.log("A plan command failed in Siril; leaving it out.")
+            notes.append("the plan's " + ", ".join(c["command"] for c in linear_extra) + " didn't run in Siril")
+    else:
+        siril([], "result_linear")  # keep result_linear.fits for the record, as before
+    img, header = finishing.read_fits_rgb(source)
+    # Duo-Band nebulae are mostly faint gas: a slightly brighter sky shows more of it. Broadband stays darker.
+    target = 0.14 if rec["duo"] else 0.12
+    img, info = finishing.colour_stretch(img, target_bg=target)
+    img = finishing.saturation(img, 0.35)
+    finishing.write_fits_rgb(work / "result_stretched.fits", img, header)
+    import tifffile
+    import numpy as np
+    tifffile.imwrite(str(out), (np.clip(img, 0, 1) * 65535 + 0.5).astype("uint16"), photometric="rgb")
+    notes.append(f"colour-keeping stretch to a {int(target * 100)}% sky (brightness stretched, colour ratios kept, "
+                 "sky noise kept grey); saturation +35% on the subject, not the sky")
     msg = "; ".join(notes)
     j.outputs["stretched"] = str(out)
     j.step(7, "done", msg[:1].upper() + msg[1:] + ".")
