@@ -1,6 +1,6 @@
 {
-  "version": "0.12.4",
-  "notes": "Contrast back: black point at sky-4 sigma, sky 11-12%, faint nebula lifted above the sky; sky smoothed only to a natural grain (about 0.18), not plasticky.",
-  "sha256": "e5e574e51ab27e990dc0c47e650486a0d9b1adcc8bb3dea44f7900e5c308e9eb",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.4.zip"
+  "version": "0.12.5",
+  "notes": "Brighter nebula: stronger faint-nebula lift (sky and stars untouched); star colour capped tighter so stars read white.",
+  "sha256": "65a25acdd945fe28caf277c4ab4f9d6810e79396126944c7db9edbb43897945c",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.5.zip"
 }

@@ -1001,8 +1001,8 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
     target = 0.12 if rec["duo"] else 0.11
     img, info = finishing.colour_stretch(img, target_bg=target)
     stars = finishing.star_mask(img)
-    img = finishing.cap_star_colour(finishing.saturation(img, 0.35, stars=stars), stars)
-    img = finishing.lift_faint(img, stars)
+    img = finishing.cap_star_colour(finishing.saturation(img, 0.35, stars=stars), stars, cap=0.15)
+    img = finishing.lift_faint(img, stars, gain=2.4)  # 1.6 in 0.12.4 left C 33's filaments 26-47% under 0.11.1
     # Smooth the sky only as far as a natural grain (about 0.18 of the sky level): 0.12.3 smoothed C 33 to 0.05,
     # which looked plasticky.
     img, g0, g1 = finishing.smooth_to_grain(img, stars, 0.18)
