@@ -546,8 +546,8 @@ def _recommend(plan: dict, a: dict, found: dict, shot: dict) -> dict:
         # The roundness cut (best 90%) comes on top of this one, so together they keep about 80% of a big session
         # (0.10 kept 75% x 80% = 58% of M 45's frames).
         r["keep_percent"] = 95 if found["count"] < 50 else 90 if found["count"] < 300 else 88
-    # less integration = more noise = stronger denoise; DWARF data needs a firm hand even on long sessions
-    r["denoise"] = 0.75 if minutes < 60 else 0.7 if minutes < 180 else 0.65
+    # Long sessions are cleaner, and GraXpert's denoise softens stars, so it eases off as the data grows.
+    r["denoise"] = 0.7 if minutes < 60 else 0.6 if minutes < 180 else 0.5
     if gx.get("run_denoise") and gx.get("denoise_strength") is not None:
         # A plan may ask for more, never much less: plans asked for 0.30, which measurably did nothing on C 33.
         r["denoise"] = max(r["denoise"] - 0.05, min(1.0, float(gx["denoise_strength"])))
@@ -884,16 +884,22 @@ def _deconvolve(j: _Job, exe: str | None, current: Path, work: Path, tune: list[
             pass
         psf = round(min(8.0, max(1.5, fwhm or 3.6)), 2)
         models = (["deconv-stellar", "deconv-obj"] if "cluster" in rec["kind"] else ["deconv-obj", "deconv-stellar"])
-        for model in models:
+        done, src = [], current
+        for i, model in enumerate(models):
+            # The object model leaves stars alone and the stellar one sharpens only stars, so both run, one after
+            # the other (C 33 in 0.11.1 ran the object model alone and its stars came out soft).
             strength = rec["deconv"] if model == "deconv-obj" else min(rec["deconv"], 0.3)
-            out, _ = _gx_run(j, exe, current, work, t, [model, "-strength", f"{strength:.2f}", "-psfsize", f"{psf}"],
-                             "result_deconv", 5, batch=True, timeout=1800)
+            out, _ = _gx_run(j, exe, src, work, t, [model, "-strength", f"{strength:.2f}", "-psfsize", f"{psf}"],
+                             f"result_deconv{'' if i == 0 else '2'}", 5, batch=True, timeout=1800)
             if out:
-                j.outputs["deconvolved"] = str(out)
-                what = "object (nebula and galaxy detail)" if model == "deconv-obj" else "stellar (star cores)"
-                j.step(5, "done", f"GraXpert AI {what} deconvolution, strength {strength:.2f}, for stars measured at "
-                                  f"{psf} px FWHM{'' if fwhm else ' (typical DWARF value; measuring failed)'}.")
-                return out
+                src = out
+                done.append(f"{'object (nebula and galaxy detail)' if model == 'deconv-obj' else 'stellar (star cores)'}"
+                            f" at {strength:.2f}")
+        if done:
+            j.outputs["deconvolved"] = str(src)
+            j.step(5, "done", f"GraXpert AI deconvolution: {' then '.join(done)}, for stars measured at {psf} px "
+                              f"FWHM{'' if fwhm else ' (typical DWARF value; measuring failed)'}.")
+            return src
     j.step(5, "skipped", "Skipped: this GraXpert's command line has no deconvolution (GraXpert 4.0 dropped it; 3.1 "
                          "has it), and other deconvolution does more harm than good on the DWARF's data.")
     return current
@@ -988,13 +994,15 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
     # Duo-Band nebulae are mostly faint gas: a slightly brighter sky shows more of it. Broadband stays darker.
     target = 0.14 if rec["duo"] else 0.12
     img, info = finishing.colour_stretch(img, target_bg=target)
-    img = finishing.saturation(img, 0.35)
+    stars = finishing.star_mask(img)
+    img = finishing.cap_star_colour(finishing.saturation(img, 0.35, stars=stars), stars)
     finishing.write_fits_rgb(work / "result_stretched.fits", img, header)
     import tifffile
     import numpy as np
     tifffile.imwrite(str(out), (np.clip(img, 0, 1) * 65535 + 0.5).astype("uint16"), photometric="rgb")
     notes.append(f"colour-keeping stretch to a {int(target * 100)}% sky (brightness stretched, colour ratios kept, "
-                 "sky noise kept grey); saturation +35% on the subject, not the sky")
+                 "sky noise kept grey); saturation +35% on the subject, not the sky or the stars; star colour capped "
+                 "so stars keep a tint instead of turning into red or cyan discs")
     msg = "; ".join(notes)
     j.outputs["stretched"] = str(out)
     j.step(7, "done", msg[:1].upper() + msg[1:] + ".")
@@ -1036,7 +1044,8 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
            "cleanup_bytes": _folder_bytes(proc)}
     if rec["duo"] and _hoo_main(rec):
         # Duo-Band on emission nebulae: Hα/OIII is the natural palette for this filter, so HOO is the main result.
-        hoo, _ = finishing.quality_gate(finishing.hoo(img))
+        hoo = finishing.hoo(img)
+        hoo, _ = finishing.quality_gate(finishing.cap_star_colour(hoo, finishing.star_mask(hoo)))
         saved = finishing.save_final(hoo, work / "result_final", header)
         out["natural"] = finishing.save_final(img, work / "result_natural", header)["tif"]
         notes.append("Duo-Band, so the main result is the HOO palette (Hα red, OIII teal); the natural-colour "

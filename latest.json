@@ -1,6 +1,6 @@
 {
-  "version": "0.12.0",
-  "notes": "Two drives: work on a fast SSD (Processing folder, e.g. E:\\IN-PROCESS) and move each finished run to a hard drive (new Settings: Finished runs folder, e.g. D:\\DWARF Processing). Re-runs and LAST SESSION find runs in both; falls back to the hard drive when the SSD is short of room; startup suggests a non-system drive.",
-  "sha256": "cc067b0c5b4d99716e69fc4c8bebae8cb9eb7a1d79be5ca39f119d0eba726060",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.0.zip"
+  "version": "0.12.1",
+  "notes": "Better stars: GraXpert object then stellar deconvolution, saturation kept off stars, star colour capped (also in HOO), gentler denoise on long sessions (0.7/0.6/0.5).",
+  "sha256": "9f42bf93ad89c9a5b91f5e97973a6812b17144a20ec40419a9ff5ec5612451f0",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.1.zip"
 }

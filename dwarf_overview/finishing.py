@@ -256,14 +256,46 @@ def colour_stretch(img, target_bg: float = 0.12, shadow_sigma: float = 2.8, prot
     return np.clip(out, 0, 1).astype("float32"), {"black": black, "D": float(d), "sky_in": med}
 
 
-def saturation(img, amount: float = 0.35, protect_bg: bool = True):
-    """Saturation boost in a hue-preserving way (scale the distance from each pixel's grey), left off the sky."""
+def star_mask(img, size: int = 9):
+    """Soft 0..1 mask of the stars in a stretched image: compact bright points that a morphological opening with a
+    disc a little wider than a star removes (a top-hat), well above the sky noise. Broad nebulosity stays out."""
+    import cv2
+    np = _np()
+    lum = (img @ np.array(IMX678_LUMA, dtype="float32")).astype("float32")
+    sky = float(np.median(lum))
+    noise = 1.4826 * float(np.median(np.abs(lum - sky)))
+    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+    top = lum - cv2.morphologyEx(lum, cv2.MORPH_OPEN, disc)
+    core = (top > max(6 * noise, 0.06)).astype("uint8")
+    core = cv2.dilate(core, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    return np.clip(cv2.GaussianBlur(core.astype("float32"), (0, 0), 1.5) * 1.5, 0, 1)
+
+
+def cap_star_colour(img, mask, cap: float = 0.25):
+    """Stars in a colour-keeping stretch and HOO turn into pure red or cyan blobs; limit their colour to a share
+    of their brightness (a star keeps a tint, not a neon disc). Only inside the star mask."""
     np = _np()
     lum = img @ np.array(IMX678_LUMA, dtype="float32")
-    gain = 1 + amount
+    chroma = img - lum[..., None]
+    size = np.abs(chroma).max(axis=2)
+    limit = cap * np.maximum(lum, 1e-6)
+    shrink = np.minimum(1, limit / np.maximum(size, 1e-9))
+    k = 1 - mask * (1 - shrink)
+    return np.clip(lum[..., None] + chroma * k[..., None], 0, 1).astype("float32")
+
+
+def saturation(img, amount: float = 0.35, protect_bg: bool = True, stars=None):
+    """Saturation boost in a hue-preserving way (scale the distance from each pixel's grey), left off the sky
+    and, given a star mask, off the stars."""
+    np = _np()
+    lum = img @ np.array(IMX678_LUMA, dtype="float32")
+    gain = np.ones(lum.shape, dtype="float32") * amount
     if protect_bg:
         sky = float(np.median(lum))
         noise = 1.4826 * float(np.median(np.abs(lum - sky)))
-        gain = 1 + amount * np.clip((lum - sky - noise) / max(1e-6, 3 * noise), 0, 1)[..., None]
+        gain = gain * np.clip((lum - sky - noise) / max(1e-6, 3 * noise), 0, 1)
+    if stars is not None:
+        gain = gain * (1 - stars)
+    gain = 1 + gain[..., None]
     out = lum[..., None] + (img - lum[..., None]) * gain
     return np.clip(out, 0, 1).astype("float32")
