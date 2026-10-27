@@ -364,18 +364,57 @@ def smooth_to_grain(img, stars=None, target: float = 0.18):
     return best
 
 
+def nebula_level(img, stars=None) -> float:
+    """How bright the subject's nebulosity is above the sky, without stars: the 99th percentile of a 7 px median-
+    filtered brightness (stars gone), minus the sky. C 33 in 0.11.1 (the punchy one) was about 0.16."""
+    import cv2
+    np = _np()
+    lum = (img @ np.array(IMX678_LUMA, dtype="float32")).astype("float32")
+    sky, _ = _sky_noise(lum)
+    if stars is not None:
+        lum = lum * (1 - stars) + sky * stars
+    flat = cv2.medianBlur((np.clip(lum, 0, 1) * 65535).astype("uint16"), 5)
+    flat = cv2.medianBlur(flat, 5).astype("float32") / 65535
+    return float(np.percentile(flat, 99)) - sky
+
+
+def lift_to(img, stars=None, target: float = 0.16, max_gain: float = 3.0):
+    """Lift the faint nebula until nebula_level reaches target (or max_gain). Returns (image, before, after, gain).
+    A fixed gain didn't carry over between targets; this aims at a measured result."""
+    before = nebula_level(img, stars)
+    if before >= target:
+        return img, before, before, 1.0
+    lo, hi = 1.0, max_gain
+    best = lift_faint(img, stars, hi)
+    if nebula_level(best, stars) <= target:
+        return best, before, nebula_level(best, stars), hi
+    for _ in range(8):
+        mid = (lo + hi) / 2
+        if nebula_level(lift_faint(img, stars, mid), stars) < target:
+            lo = mid
+        else:
+            hi = mid
+    out = lift_faint(img, stars, hi)
+    return out, before, nebula_level(out, stars), hi
+
+
 def lift_faint(img, stars=None, gain: float = 1.6):
     """Contrast for the faint nebula without lifting the sky's noise: brightness a few noise levels above the sky
-    is pushed up (from 3 noise levels above the sky, slope `gain`, easing to none at white), the sky itself and the stars untouched.
+    is pushed up (from a little above the sky's smoothed noise, slope `gain`, easing to none at white), the sky itself and the stars untouched.
     Colour ratios are kept. 0.12.3's gentle stretch left C 33's filaments 40-60% dimmer than 0.11.1."""
     np = _np()
     w = np.array(IMX678_LUMA, dtype="float32")
     lum = (img @ w).astype("float32")
-    sky, noise = _sky_noise(lum)
+    sky, _ = _sky_noise(lum)
     t = np.clip(lum - sky, 0, None)
     span = max(1e-6, 1 - sky)
     curved = sky + t * gain / (1 + (gain - 1) * t / span)
-    ramp = np.clip((lum - sky - 3 * noise) / max(1e-6, 5 * noise), 0, 1)
+    # Where the lift starts is decided on a blurred copy: on the grainy unsmoothed stretch, "8 pixel-noise levels
+    # above the sky" was above C 33's filaments, so 0.12.4-0.12.6 lifted almost nothing whatever the gain.
+    import cv2
+    soft = cv2.GaussianBlur(lum, (0, 0), 2.0)
+    soft_noise = max(1e-6, 1.4826 * float(np.median(np.abs(soft[lum <= np.percentile(lum, 50)] - sky))))
+    ramp = np.clip((soft - sky - 2 * soft_noise) / max(1e-6, 4 * soft_noise), 0, 1)
     if stars is not None:
         ramp = ramp * (1 - stars)
     new = np.where(lum > sky, lum + ramp * (curved - lum), lum)

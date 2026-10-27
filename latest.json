@@ -1,6 +1,6 @@
 {
-  "version": "0.12.6",
-  "notes": "Nebula brightness fixed: sky and noise are now measured on the real sky, not the nebula, so the nebula lift and saturation actually reach the filaments; stars re-balanced to white after the background fix.",
-  "sha256": "5cfa5476c31cc8bf9f9c2636dcb8fba4d785d24f3877591b7ba78b5dd195c1f3",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.6.zip"
+  "version": "0.12.7",
+  "notes": "Brighter nebula, for real: the lift now aims at a measured nebula brightness (about 0.16 above the sky) and starts where the nebula actually is; the step note shows before and after.",
+  "sha256": "b07ba8cd7b09166dbed51b5e00a6b691af9ab36787835fcddb769f2d6d79d7cf",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.7.zip"
 }

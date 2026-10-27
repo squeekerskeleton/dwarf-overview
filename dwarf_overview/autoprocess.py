@@ -1002,7 +1002,8 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
     img, info = finishing.colour_stretch(img, target_bg=target)
     stars = finishing.star_mask(img)
     img = finishing.cap_star_colour(finishing.saturation(img, 0.35, stars=stars), stars, cap=0.15)
-    img = finishing.lift_faint(img, stars, gain=1.8)
+    # Aim the nebula at a measured brightness (C 33 in 0.11.1, the punchiest so far, was about 0.16 above the sky).
+    img, neb0, neb1, lift = finishing.lift_to(img, stars, 0.16)
     # Smooth the sky only as far as a natural grain (about 0.18 of the sky level): 0.12.3 smoothed C 33 to 0.05,
     # which looked plasticky.
     img, g0, g1 = finishing.smooth_to_grain(img, stars, 0.18)
@@ -1012,7 +1013,9 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
     tifffile.imwrite(str(out), (np.clip(img, 0, 1) * 65535 + 0.5).astype("uint16"), photometric="rgb")
     notes.append(f"colour-keeping stretch to a {int(target * 100)}% sky (brightness stretched, colour ratios kept, "
                  "sky noise kept grey); saturation +35% on the subject, not the sky or the stars; star colour capped "
-                 "so stars keep a tint instead of turning into red or cyan discs; faint nebula lifted above the sky; "
+                 "so stars keep a tint instead of turning into red or cyan discs; "
+                 + (f"faint nebula lifted ×{lift:.2f}, from {neb0:.3f} to {neb1:.3f} above the sky; " if lift > 1 else
+                    f"nebula already {neb0:.3f} above the sky, not lifted; ")
                  + (f"sky grain {g0:.2f} smoothed to {g1:.2f} of the sky level" if g1 < g0 else
                     f"sky grain {g0:.2f} of the sky level, left as it is"))
     msg = "; ".join(notes)
