@@ -155,7 +155,15 @@ def chroma_denoise(src: Path, dst: Path, sigma: float) -> None:
     img, header = read_fits_rgb(src)
     lum = img.mean(axis=2, keepdims=True)
     chroma = img - lum
-    chroma = np.stack([cv2.GaussianBlur(chroma[..., c], (0, 0), sigma) for c in range(3)], axis=-1)
+    # Stars stay out of the blur both ways: their own colour is kept, and it isn't smeared into a coloured ring
+    # around them (C 33 in 0.11.1 had those halos). Normalised blur: blur(chroma * sky) / blur(sky).
+    peak = max(1e-9, float(np.percentile(lum, 99.9)))
+    preview = np.arcsinh(np.clip(lum[..., 0] / peak, 0, None) * 200) / np.arcsinh(200)
+    stars = star_mask(np.repeat(preview[..., None], 3, axis=2))
+    keep = (1 - stars).astype("float32")
+    norm = np.maximum(cv2.GaussianBlur(keep, (0, 0), sigma), 1e-3)
+    smooth = np.stack([cv2.GaussianBlur(chroma[..., c] * keep, (0, 0), sigma) / norm for c in range(3)], axis=-1)
+    chroma = stars[..., None] * chroma + keep[..., None] * smooth
     write_fits_rgb(dst, np.clip(lum + chroma, 0, None), header)
 
 
