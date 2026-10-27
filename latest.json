@@ -1,6 +1,6 @@
 {
-  "version": "0.12.10",
-  "notes": "StarNet2 fix: its compressed (LZW) TIFFs are now read with OpenCV; if StarNet's output can't be used, star reduction is skipped instead of failing the run.",
-  "sha256": "1c823fadc88e9bef8b077d412626abf5fc7501ee9e830790f3e0637b13dad4ea",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.10.zip"
+  "version": "0.12.11",
+  "notes": "StarNet star reduction on nebulae eased from 42% to 30% dimmer stars, so busy star fields still look natural.",
+  "sha256": "68264842432f2a634568e6c2ffd83469ee115af8a97ea187a1042389ad6aaa02",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.11.zip"
 }

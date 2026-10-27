@@ -556,7 +556,7 @@ def _recommend(plan: dict, a: dict, found: dict, shot: dict) -> dict:
     elif "galaxy" in kind:
         r["stars"] = 0.4
     else:
-        r["stars"] = 0.7  # nebulae: let the gas show through the star field
+        r["stars"] = 0.5  # nebulae: about 30% dimmer stars (42% left C 33's Cygnus field looking empty)
     # Object deconvolution at half strength: the DWARF's 2.75"/px is undersampled, so there's detail to gain in
     # the nebula but not much in the stars, and too much brings out noise.
     r["deconv"] = 0.5
