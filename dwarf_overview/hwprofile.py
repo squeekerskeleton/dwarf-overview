@@ -90,6 +90,34 @@ def _disk_mb_s(folder: Path) -> float | None:
         return None
 
 
+def _drive_tip(work: Path) -> str:
+    """When the processing folder is on the system drive, suggest a roomier other drive (an SSD is best)."""
+    import psutil
+    try:
+        sysdrive = Path(os.environ.get("SystemDrive", "/") + os.sep).anchor.lower()
+        if Path(work).resolve().anchor.lower() != sysdrive:
+            return ""
+        others = []
+        for part in psutil.disk_partitions(all=False):
+            root = part.mountpoint
+            if Path(root).anchor.lower() == sysdrive or "cdrom" in part.opts or not part.fstype:
+                continue
+            try:
+                others.append((psutil.disk_usage(root).free, root))
+            except OSError:
+                continue
+        if not others:
+            return ""
+        free, root = max(others)
+        if free < 100e9:
+            return ""
+        return (f" The processing folder is on the system drive; {root} has {free / 1e9:.0f} GB free. Setting "
+                f"Processing folder to e.g. {Path(root) / 'IN-PROCESS'} (fastest if it's an SSD) and Finished runs "
+                "folder to a big hard drive keeps the system drive free.")
+    except Exception:
+        return ""
+
+
 def measure() -> dict:
     import psutil
     from .autoprocess import work_root
@@ -120,7 +148,7 @@ def measure() -> dict:
     profile["summary"] = (f"Tuned for this computer: Siril uses {siril_threads} of {threads} threads and up to "
                           f"{int(siril_mem * 100)}% of free memory; GraXpert AI on "
                           f"{'the graphics card (' + gpu['name'] + ')' if gx_gpu else 'the processor'}; "
-                          f"{copies} frames copied at a time" + ("; processing runs at raised priority" if raised else "") + ".")
+                          f"{copies} frames copied at a time" + ("; processing runs at raised priority" if raised else "") + ".") + _drive_tip(work)
     try:
         (config.data_dir() / "hw_profile.json").write_text(json.dumps(profile, indent=2), encoding="utf-8")
     except OSError:

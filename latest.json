@@ -1,6 +1,6 @@
 {
-  "version": "0.11.1",
-  "notes": "Star size measured correctly (was about 2x too big: your focus is fine); the tuned denoise and stretch can't be overridden by weaker plan settings; frame selection keeps about 80% instead of 58%; HOO only for emission nebulae; smoother background for galaxies, clusters and reflection nebulae; frame edges feathered; rejected frames stay opt-in.",
-  "sha256": "4398d73485792c011a291318398f1998a342e7143790860a8b96471df5b12b9d",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.11.1.zip"
+  "version": "0.12.0",
+  "notes": "Two drives: work on a fast SSD (Processing folder, e.g. E:\\IN-PROCESS) and move each finished run to a hard drive (new Settings: Finished runs folder, e.g. D:\\DWARF Processing). Re-runs and LAST SESSION find runs in both; falls back to the hard drive when the SSD is short of room; startup suggests a non-system drive.",
+  "sha256": "cc067b0c5b4d99716e69fc4c8bebae8cb9eb7a1d79be5ca39f119d0eba726060",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.0.zip"
 }

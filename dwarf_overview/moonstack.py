@@ -405,6 +405,8 @@ def _run(j, items, source, work, date) -> None:
     try:
         out = _pipeline(j, items, source, work, date)
         if not j.stopped():
+            from .autoprocess import archive
+            out = archive(j, work, out)
             j.job.update(state="done", output=out)
     except Exception as e:
         if not j.stopped():

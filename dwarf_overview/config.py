@@ -34,6 +34,7 @@ DEFAULTS = {
     "dwarf_ip": "",
     "library_folder": "",
     "work_folder": "",
+    "finished_folder": "",
     "update_url": "",
     "dwarfium_web_url": "",
     "astap_path": "",

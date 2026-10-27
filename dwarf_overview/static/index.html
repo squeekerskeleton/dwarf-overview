@@ -454,6 +454,7 @@
   <div class="grid2"><div><label for="dwarfIp">DWARF IP address (Find my DWARF fills this in)</label><input id="dwarfIp" placeholder="e.g. 192.168.1.42"></div>
     <div><label for="libFolder">Save DWARF downloads to</label><input id="libFolder" placeholder="Pictures\DWARF Library"></div></div>
   <label for="workFolder">Processing folder (raw frames and Auto-apply results; needs lots of room, an SSD is fastest)</label><input id="workFolder" placeholder="e.g. E:\DWARF Processing">
+  <label for="finishedFolder">Finished runs folder (each finished run is moved here, e.g. a big hard drive, so the processing drive stays free; blank = leave them in the processing folder)</label><input id="finishedFolder" placeholder="e.g. D:\DWARF Processing">
   <div class="grid2"><div><label for="siteLat">Your site's latitude (for Dwarfium)</label><input id="siteLat" placeholder="e.g. 48.77"></div>
     <div><label for="siteLon">longitude (west is negative)</label><input id="siteLon" placeholder="e.g. -104.56"></div></div>
   <div class="row" style="margin-top:6px"><input id="siteName" placeholder="Site name, e.g. Plentywood, MT" style="flex:1"><button id="siteHere" type="button">Use this laptop's location</button></div><span id="siteStatus" class="caption"></span>
@@ -535,7 +536,7 @@ $("settingsBtn").onclick = () => {
   $("model").value = cfg.model; $("effort").value = cfg.effort; $("sirilPath").value = cfg.siril_path;
   $("gxPath").value = cfg.graxpert_path; $("startFolder").value = cfg.start_folder;
   $("ppPath").value = cfg.pipp_path; $("asPath").value = cfg.autostakkert_path; $("rxPath").value = cfg.registax_path;
-  $("dwarfIp").value = cfg.dwarf_ip; $("siteLat").value = cfg.site_lat; $("siteLon").value = cfg.site_lon; $("siteName").value = cfg.site_name || ""; $("projFolder").value = cfg.projects_folder || ""; drawSwatches(); $("siteStatus").textContent = ""; $("libFolder").value = cfg.library_folder; $("workFolder").value = cfg.work_folder || ""; $("dwarfiumPath").value = cfg.dwarfium_path; $("astapPath").value = cfg.astap_path; $("starnetPath").value = cfg.starnet_path || ""; $("dwarfiumWeb").value = cfg.dwarfium_web_url; $("updateUrl").value = cfg.update_url;
+  $("dwarfIp").value = cfg.dwarf_ip; $("siteLat").value = cfg.site_lat; $("siteLon").value = cfg.site_lon; $("siteName").value = cfg.site_name || ""; $("projFolder").value = cfg.projects_folder || ""; drawSwatches(); $("siteStatus").textContent = ""; $("libFolder").value = cfg.library_folder; $("workFolder").value = cfg.work_folder || ""; $("finishedFolder").value = cfg.finished_folder || ""; $("dwarfiumPath").value = cfg.dwarfium_path; $("astapPath").value = cfg.astap_path; $("starnetPath").value = cfg.starnet_path || ""; $("dwarfiumWeb").value = cfg.dwarfium_web_url; $("updateUrl").value = cfg.update_url;
   $("imPath").value = cfg.imppg_path; $("otherName").value = cfg.other_app_name; $("otherPath").value = cfg.other_app_path;
   const t = cfg.tools, f = (v) => v ? '<span class="ok">found</span>' : '<span class="error">not found</span>';
   $("toolStatus").innerHTML = `GraXpert: ${f(t.graxpert)} &middot; Siril: ${f(t.siril)} &middot; siril-cli: ${f(t.siril_cli)}<br>ASTAP: ${f(t.astap)} &middot; Dwarfium: ${f(t.dwarfium)} &middot; PIPP: ${f(t.pipp)} &middot; AutoStakkert: ${f(t.autostakkert)} &middot; RegiStax: ${f(t.registax)} &middot; ImPPG: ${f(t.imppg)}<br>Data folder: ${esc(cfg.data_dir)}`;
@@ -546,7 +547,7 @@ $("saveSettings").onclick = async () => {
   cfg = await api("/api/config", { api_key: $("apiKey").value, model: $("model").value.trim(), effort: $("effort").value,
     siril_path: $("sirilPath").value.trim(), graxpert_path: $("gxPath").value.trim(), start_folder: $("startFolder").value.trim(),
     pipp_path: $("ppPath").value.trim(), autostakkert_path: $("asPath").value.trim(), registax_path: $("rxPath").value.trim(),
-    imppg_path: $("imPath").value.trim(), dwarf_ip: $("dwarfIp").value.trim(), site_lat: $("siteLat").value.trim(), site_lon: $("siteLon").value.trim(), site_name: $("siteName").value.trim(), projects_folder: $("projFolder").value.trim(), theme_primary: themePick.primary, theme_secondary: themePick.secondary, library_folder: $("libFolder").value.trim(), work_folder: $("workFolder").value.trim(),
+    imppg_path: $("imPath").value.trim(), dwarf_ip: $("dwarfIp").value.trim(), site_lat: $("siteLat").value.trim(), site_lon: $("siteLon").value.trim(), site_name: $("siteName").value.trim(), projects_folder: $("projFolder").value.trim(), theme_primary: themePick.primary, theme_secondary: themePick.secondary, library_folder: $("libFolder").value.trim(), work_folder: $("workFolder").value.trim(), finished_folder: $("finishedFolder").value.trim(),
     dwarfium_path: $("dwarfiumPath").value.trim(), astap_path: $("astapPath").value.trim(), starnet_path: $("starnetPath").value.trim(), dwarfium_web_url: $("dwarfiumWeb").value.trim(), update_url: $("updateUrl").value.trim(), other_app_name: $("otherName").value.trim(), other_app_path: $("otherPath").value.trim() });
   $("settings").close(); loadConfig();
 };
@@ -783,7 +784,7 @@ async function autoFrames() {
   try {
     const f = await api("/api/autoprocess/frames", { assessment_id: assessmentId, include_failed: $("autoFailed").checked });
     $("autoFrames").innerHTML = `<b>${f.count} frames found</b>${f.failed ? ` (${f.failed} the DWARF rejected)` : ""} for ${esc(f.session)}, from ${esc(f.sources.join(", ") || "nowhere")}. ` +
-      (f.bytes_to_copy ? `${gb(f.bytes_to_copy)} to copy. ` : "") + `Needs about ${gb(f.bytes_needed)}; ${gb(f.bytes_free)} free in ${esc(f.work_folder)}.` +
+      (f.bytes_to_copy ? `${gb(f.bytes_to_copy)} to copy. ` : "") + `Needs about ${gb(f.bytes_needed)}; ${gb(f.bytes_free)} free in ${esc(f.work_folder)}.` + (f.fallback ? ` ${esc(f.fallback)}` : "") +
       (f.fits ? "" : ` <span class="error">Not enough room: choose a bigger drive for the processing folder in Settings.</span>`) +
       (!f.dwarf_reached && f.count < 3 ? ` <span class="warn">The DWARF isn't reachable, so its frames can't be listed. Switch it on (or plug in USB-C).</span>` : "");
     $("autoReuseL").classList.toggle("hidden", !f.has_stack); $("autoReuse").checked = !!f.has_stack;

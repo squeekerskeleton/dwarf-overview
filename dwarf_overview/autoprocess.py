@@ -54,6 +54,90 @@ def work_root() -> Path:
     return Path(custom).expanduser() if custom else dwarf.library_dir() / "_processing"
 
 
+def finished_root() -> Path | None:
+    """Where finished runs are moved (Settings: Finished runs folder), so the fast processing drive stays free.
+    Empty = finished runs stay in the processing folder, as before."""
+    custom = (config.load().get("finished_folder") or "").strip()
+    if not custom:
+        return None
+    root = Path(custom).expanduser()
+    try:
+        if root.resolve() == work_root().resolve():
+            return None
+    except OSError:
+        return None
+    return root
+
+
+def _finished_dir(name: str) -> Path | None:
+    root = finished_root()
+    return root / _safe(name) if root else None
+
+
+def _repath(obj, old: str, new: str):
+    if isinstance(obj, str):
+        return new + obj[len(old):] if obj == old or obj.startswith((old + "/", old + "\\")) else obj
+    if isinstance(obj, list):
+        return [_repath(x, old, new) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _repath(v, old, new) for k, v in obj.items()}
+    return obj
+
+
+def _merge_move(src: Path, dst: Path) -> None:
+    if src.is_dir():
+        dst.mkdir(parents=True, exist_ok=True)
+        for child in src.iterdir():
+            _merge_move(child, dst / child.name)
+        try:
+            src.rmdir()
+        except OSError:
+            pass
+    else:
+        if dst.exists():
+            dst.unlink()
+        shutil.move(str(src), str(dst))
+
+
+def archive(j, work: Path, out: dict, drop: tuple = ("process",)) -> dict:
+    """A finished run: delete Siril's working copies, then move everything else (frames, stack, results, run
+    record) from the processing folder to the finished-runs folder, and point the results at their new place."""
+    dest_root = finished_root()
+    if not dest_root or not work.is_dir():
+        return out
+    dest = dest_root / work.name
+    try:
+        if dest.resolve() == work.resolve():  # it already ran there (the processing drive was short of room)
+            return out
+    except OSError:
+        return out
+    for d in drop:
+        shutil.rmtree(work / d, ignore_errors=True)
+    need = _folder_bytes(work)
+    try:
+        dest_root.mkdir(parents=True, exist_ok=True)
+        free = shutil.disk_usage(dest_root).free
+    except OSError as e:
+        j.log(f"Couldn't reach the finished-runs folder ({e}); the results stay in {work}.")
+        return out
+    if free < need + 1e9:
+        j.log(f"The finished-runs folder has only {free / 1e9:.0f} GB free; the results stay in {work}.")
+        return out
+    j.log(f"Moving the finished run ({need / 1e9:.1f} GB) to {dest}…")
+    try:
+        _merge_move(work, dest)
+    except OSError as e:
+        j.log(f"Moving stopped part-way ({e}); some files are still in {work}.")
+        return out
+    if j.folder:
+        j.folder = dest
+    j.log(f"Finished run moved to {dest}.")
+    out = _repath(out, str(work), str(dest))
+    if isinstance(out, dict) and "cleanup_bytes" in out:
+        out["cleanup_bytes"] = 0  # Siril's working copies are already gone
+    return out
+
+
 def _session_of(preview: Path) -> tuple[str, Path]:
     """The session folder name (DWARF_RAW_..._EXP_.._GAIN_.._<time>) and its local folder."""
     for folder in [preview.parent] + list(preview.parents)[:2]:
@@ -87,7 +171,11 @@ def find_frames(preview_path: str, include_failed: bool = False) -> dict:
             frames[fname] = {"name": fname, "source": source, "where": where, "size": size}
 
     held = lights.parent / FAILED_DIR  # rejected frames kept out of the stack by the last screening
-    for folder, source in ((lights, "processing folder"), (held, "processing folder"), (local, "laptop library")):
+    done = _finished_dir(name)
+    places = [(lights, "processing folder"), (held, "processing folder")]
+    if done:  # an earlier finished run's frames, moved off the processing drive
+        places += [(done / "lights", "finished runs folder"), (done / FAILED_DIR, "finished runs folder")]
+    for folder, source in places + [(local, "laptop library")]:
         if folder.is_dir():
             for f in folder.iterdir():
                 if f.is_file():
@@ -117,10 +205,21 @@ def find_frames(preview_path: str, include_failed: bool = False) -> dict:
     to_copy = sum(f["size"] for f in shown if f["source"] != "processing folder")
     free = shutil.disk_usage(_existing_parent(work_root())).free
     need = to_copy + total * SPACE_FACTOR
+    work, fallback = work_root() / _safe(name), ""
+    if free <= need and done:  # the fast drive is short: work on the finished-runs drive instead (slower)
+        try:
+            done_free = shutil.disk_usage(_existing_parent(done)).free
+        except OSError:
+            done_free = 0
+        if done_free > need:
+            work, free = done, done_free
+            fallback = (f"Not enough room in the processing folder, so this run works in {done} instead "
+                        "(slower, but it fits).")
     return {"session": name, "frames": shown, "count": len(shown), "failed": failed, "dwarf_reached": remote,
-            "has_stack": (work_root() / _safe(name) / "result_stack.fits").exists(),
+            "has_stack": (work_root() / _safe(name) / "result_stack.fits").exists()
+                         or bool(done and (done / "result_stack.fits").exists()),
             "bytes": total, "bytes_to_copy": to_copy, "bytes_needed": int(need), "bytes_free": free,
-            "fits": free > need, "work_folder": str(work_root() / _safe(name))}
+            "fits": free > need, "work_folder": str(work), "fallback": fallback}
 
 
 def _existing_parent(p: Path) -> Path:
@@ -304,6 +403,13 @@ def start(assessment_id: int, include_failed: bool = False, resume: dict | None 
     if reuse_stack and not resume:
         # Redo only the finishing: carry the last run's stack over as if resuming after the stacking step.
         stack = Path(found["work_folder"]) / "result_stack.fits"
+        done = _finished_dir(found["session"])
+        if not stack.exists() and done and (done / "result_stack.fits").exists():
+            # The last run was moved to the finished-runs folder: bring its stack back to the fast drive.
+            stack.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(done / "result_stack.fits", stack)
+            if (done / RUN_FILE).exists() and not (stack.parent / RUN_FILE).exists():
+                shutil.copy2(done / RUN_FILE, stack.parent / RUN_FILE)
         if not stack.exists():
             raise ProcessError("There's no earlier stack for this session to reuse; untick that option.")
         try:
@@ -336,6 +442,7 @@ def _run(j: _Job, a: dict, found: dict, resume: dict | None = None) -> None:
     try:
         out = _pipeline(j, a, found, resume)
         if not j.stopped():
+            out = archive(j, Path(found["work_folder"]), out)
             j.job.update(state="done", output=out)
     except Exception as e:  # every failure goes back to the page
         if not j.stopped():
@@ -1010,11 +1117,9 @@ def cleanup(folder: str) -> dict:
 def unfinished() -> list[dict]:
     """Auto-apply runs that didn't finish (stopped, failed, or cut off by closing the app or an update),
     newest first, plus any run still going."""
-    root = work_root()
+    roots = [r for r in (work_root(), finished_root()) if r and r.is_dir()]
     out = []
-    if not root.is_dir():
-        return out
-    for f in root.glob(f"*/{RUN_FILE}"):
+    for f in (f for root in roots for f in root.glob(f"*/{RUN_FILE}")):
         try:
             r = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
