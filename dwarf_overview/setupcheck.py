@@ -31,6 +31,14 @@ def _packages() -> list[str]:
     return missing
 
 
+def _starnet_weights(exe: str | None) -> bool:
+    """StarNet only works with its trained weights next to the program (a .pb, .onnx or *weights* file)."""
+    if not exe:
+        return False
+    folder = Path(exe).parent
+    return any(folder.glob("*.pb")) or any(folder.glob("*.onnx")) or any(folder.glob("*weights*"))
+
+
 def _astap_db(astap: str | None) -> bool:
     if not astap:
         return False
@@ -63,8 +71,10 @@ def check() -> dict:
          "found": bool(t.get("astap")) and _astap_db(t.get("astap")),
          "detail": (t.get("astap") or "") + ("" if _astap_db(t.get("astap")) or not t.get("astap") else " (star database missing)"),
          "url": "https://www.hnsky.org/astap.htm", "why": "Names the subject of each photo from its stars. Install ASTAP, then the D50 database from the same page."},
-        {"key": "starnet", "name": "StarNet++ v2 (command-line version)", "level": "recommended", "found": bool(t.get("starnet")),
-         "detail": t.get("starnet") or "", "url": "https://www.starnetastro.com/download/",
+        {"key": "starnet", "name": "StarNet++ v2 (command-line version)", "level": "recommended",
+         "found": bool(t.get("starnet")) and _starnet_weights(t.get("starnet")),
+         "detail": (t.get("starnet") or "") + ("" if _starnet_weights(t.get("starnet")) or not t.get("starnet")
+                                              else " (its weights file is missing: unzip the whole download into one folder)"), "url": "https://www.starnetastro.com/download/",
          "why": "Auto-apply uses it to separate the stars for a clean star reduction. Unzip it into Program Files\\StarNet (or set its location in Settings); without it a simpler star reduction is used."},
         {"key": "dwarfium", "name": "Dwarfium (browser edition)", "level": "recommended", "found": bool(inst),
          "detail": inst["version"] if inst else "", "action": "install_dwarfium",

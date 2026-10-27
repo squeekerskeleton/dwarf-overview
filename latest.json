@@ -1,6 +1,6 @@
 {
-  "version": "0.12.8",
-  "notes": "Nebula target raised to 0.18 above the sky; HOO balances OIII against H-alpha on the star-free nebula (OIII a touch brighter), so the teal matches the red.",
-  "sha256": "aaaa27b02575345be9421e3808f01dcc98b0c74e9b810f531260e894fc30bc52",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.8.zip"
+  "version": "0.12.9",
+  "notes": "Software check: StarNet++ only counts as installed when its weights file is next to it (otherwise it says what's missing).",
+  "sha256": "8df283edfbb74a80775f51e04533943ac320d235e6fe3efb5cfdba16291ee069",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.12.9.zip"
 }
