@@ -36,8 +36,11 @@ from pathlib import Path
 from . import dwarf, finishing, scope, tools
 
 OUT_W, OUT_H = 3840, 2160
-KEEP = 0.10            # share of frames kept
-MAX_KEEP, MIN_KEEP = 500, 30
+KEEP = 0.05            # share of each source's frames kept (5% beat 10% and 20% on Kip's 2026-04-30 videos)
+MAX_KEEP, MIN_KEEP = 1000, 50
+REF_N = 8              # the alignment reference is the mean of this many of the sharpest frames
+ADD_MIN = 0.98         # a further source joins only if the combined stack keeps this share of the sharpness
+SOFT = 0.8             # a source whose median frame is below this share of the best same-size source's is left out
 CLUSTER_MIN = 45       # minutes either side of the night's main cluster
 STEPS = ["Find the night's Moon shots", "Score every frame's sharpness", "Align and stack the best frames",
          "Sharpen", "Centre in a 4K frame and save"]
@@ -298,7 +301,7 @@ def _global_warp(ref_small, img_small, scale: float):
     return warp
 
 
-def _local_map(ref_g, img_g, mask, patch: int = 160, step: int = 128, max_shift: float = 6.0):
+def _local_map(ref_g, img_g, mask, patch: int = 128, step: int = 64, max_shift: float = 8.0):
     """Per-patch shifts across the disc (seeing ripples), smoothed into a full-resolution remap field."""
     import cv2
     import numpy as np
@@ -318,17 +321,105 @@ def _local_map(ref_g, img_g, mask, patch: int = 160, step: int = 128, max_shift:
                 continue
             # Copies: OpenCV applies the window to its inputs in place, which would darken the reference.
             (dx, dy), resp = cv2.phaseCorrelate(r.copy(), img_g[y:y + patch, x:x + patch].copy(), win)
-            if resp > 0.15 and abs(dx) < max_shift and abs(dy) < max_shift:
+            if resp > 0.1 and abs(dx) < max_shift and abs(dy) < max_shift:
                 gx[a, b], gy[a, b], ok[a, b] = dx, dy, True
     if ok.sum() < 4:
         return None
     for g in (gx, gy):
         g[~ok] = float(np.median(g[ok]))
         g[:] = cv2.GaussianBlur(g, (3, 3), 0.8)
-    fx = cv2.resize(gx, (w, h), interpolation=cv2.INTER_LINEAR)
-    fy = cv2.resize(gy, (w, h), interpolation=cv2.INTER_LINEAR)
+    fx = cv2.resize(gx, (w, h), interpolation=cv2.INTER_CUBIC)
+    fy = cv2.resize(gy, (w, h), interpolation=cv2.INTER_CUBIC)
     X, Y = np.meshgrid(np.arange(w, dtype="float32"), np.arange(h, dtype="float32"))
     return X + fx, Y + fy
+
+
+def _sharpness(img, mask=None) -> float:
+    """RMS Laplacian inside the disc (eroded), relative to its brightness, at the image's own scale."""
+    import cv2
+    import numpy as np
+    g = img.mean(axis=2).astype("float32") if img.ndim == 3 else img.astype("float32")
+    if mask is None:
+        mask = g > np.percentile(g, 99.5) * 0.25
+    inner = cv2.erode(mask.astype("uint8"), np.ones((25, 25), np.uint8)).astype(bool)
+    if inner.sum() < 1000:
+        return 0.0
+    lap = cv2.Laplacian(cv2.GaussianBlur(g, (0, 0), 0.7), cv2.CV_32F)
+    return float(np.sqrt(np.mean(lap[inner] ** 2)) / max(1e-6, float(g[inner].mean())))
+
+
+def _read(each_frame, si: int, keys: list) -> dict:
+    """The given frames of one source, read in one pass (stopping once all are found)."""
+    want, out = set(keys), {}
+    for s_, k, img in each_frame({si}):
+        if k in want:
+            out[k] = img
+            if len(out) == len(want):
+                break
+    return out
+
+
+def _screen(j, sources: list, ranked: dict, each_frame, trial: int = 20) -> tuple[list, str]:
+    """Which sources to stack: never one that costs resolution (Kip: "if it degrades resolution, do not stack
+    together"). A source whose median frame is well below the sharpest source of the same size is left out (on
+    2026-04-30 one video's 0.032 against 0.055; stacking it in cut the sharpness from 0.102 to 0.075). Then each
+    source's best frames are stacked on their own at the common 4K scale, and, sharpest first, each next source
+    joins only if the combined stack keeps ADD_MIN of the sharpness. Returns (source indexes, note)."""
+    import cv2
+    import numpy as np
+    left, notes = [], []
+    med = {si: float(np.median([f[0] for f in fr])) for si, fr in ranked.items()}
+    for si in list(ranked):
+        same = [o for o in ranked if sources[o]["up"] == sources[si]["up"]]
+        top = max(med[o] for o in same)
+        if med[si] < SOFT * top:
+            left.append(si)
+            notes.append(f"{sources[si]['name']} left out (softer: median sharpness {med[si]:.3f} against {top:.3f})")
+    cand = [si for si in ranked if si not in left]
+    if len(cand) < 2:
+        return cand, "; ".join(notes)
+    j.log("Testing whether each video and session adds detail or blurs it…")
+    stacks = {}
+    for si in cand:
+        imgs = list(_read(each_frame, si, [f[2] for f in ranked[si][:trial]]).values())
+        if sources[si]["up"] > 1:
+            imgs = [cv2.resize(i, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC) for i in imgs]
+        if not imgs:
+            continue
+        r_small, sc = _gray_small(imgs[0])
+        acc = imgs[0].astype("float64")
+        for img in imgs[1:]:
+            if img.shape != imgs[0].shape:
+                img = cv2.resize(img, imgs[0].shape[1::-1], interpolation=cv2.INTER_CUBIC)
+            acc += cv2.warpAffine(img, _global_warp(r_small, _gray_small(img)[0], sc), imgs[0].shape[1::-1],
+                                  flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
+        stacks[si] = (acc / len(imgs)).astype("float32")
+    order = sorted(stacks, key=lambda si: -_sharpness(stacks[si]))
+    first = stacks[order[0]]
+    f_small, f_sc = _gray_small(first)
+    f_g = first.mean(axis=2).astype("float32")
+    f_mask = cv2.resize(_disc(f_small)[0].astype("uint8"), f_g.shape[::-1], interpolation=cv2.INTER_NEAREST).astype(bool)
+    used = [order[0]]
+    acc, wsum = first.astype("float64") * len(ranked[order[0]]), float(len(ranked[order[0]]))
+    cur = _sharpness(first)
+    for si in order[1:]:
+        img = stacks[si]
+        if img.shape != first.shape:
+            img = cv2.resize(img, first.shape[1::-1], interpolation=cv2.INTER_CUBIC)
+        img = cv2.warpAffine(img, _global_warp(f_small, _gray_small(img)[0], f_sc), first.shape[1::-1],
+                             flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
+        img = _tone_match(img, f_g, f_mask)
+        n = float(len(ranked[si]))
+        trial_s = _sharpness(((acc + img * n) / (wsum + n)).astype("float32"))
+        if trial_s >= ADD_MIN * cur:
+            used.append(si)
+            acc, wsum, cur = acc + img * n, wsum + n, trial_s
+        else:
+            notes.append(f"{sources[si]['name']} left out (it would blur the stack: sharpness {trial_s:.3f} against {cur:.3f})")
+    for si in cand:
+        if si not in stacks:
+            used.append(si)  # couldn't be tested: keep the old behaviour
+    return sorted(used), "; ".join(notes)
 
 
 # ---------------------------------------------------------------- the job
@@ -477,7 +568,7 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
     if nf:
         parts.append(f"{sum(1 for s in sources if s['kind'] == 'fits')} raw session(s), about {nf} frames")
     note = (f"{' and '.join(parts)}, from {min(s['when'] for s in sources):%H:%M} to {max(s['when'] for s in sources):%H:%M}, "
-            "all stacked together at 4K")
+            "each tested before being stacked together at 4K")
     if left:
         note += f"; left out {len(left)} shot(s) taken more than {CLUSTER_MIN} min from the rest"
     j.step(0, "done", note + ".")
@@ -515,28 +606,43 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
             j.part(1, n / max(1, total))
     if len(frames) < 5:
         raise MoonError("Fewer than 5 usable Moon frames (the disc was missing, cut off by the frame edge or lost in glare).")
-    # Each source is ranked against itself (resolution, exposure and gain differ), and the best ~10% of each kept.
+    # Each source is ranked against itself (resolution, exposure and gain differ), and the best 5% of each kept.
+    ranked = {si: sorted((f for f in frames if f[1] == si), key=lambda f: -f[0]) for si in sorted({f[1] for f in frames})}
+    used, why = _screen(j, sources, ranked, each_frame)
     best = []
-    budget = int(min(MAX_KEEP, max(MIN_KEEP, len(frames) * KEEP)))
-    for si in sorted({f[1] for f in frames}):
-        mine = sorted((f for f in frames if f[1] == si), key=lambda f: -f[0])
-        share = max(3, round(budget * len(mine) / len(frames)))
-        best += mine[:share]
-    best.sort(key=lambda f: -f[0] * sources[f[1]]["weight"])
-    j.step(1, "done", f"Scored {n} frames; keeping the sharpest {len(best)}, about a tenth of each video and session.")
+    for si in used:
+        mine = ranked[si]
+        best += mine[:min(len(mine), max(MIN_KEEP, round(len(mine) * KEEP)))]
+    best = sorted(best, key=lambda f: -f[0] * sources[f[1]]["weight"])[:MAX_KEEP]
+    j.step(1, "done", f"Scored {n} frames; keeping the sharpest {len(best)}, about 5% of each video and session"
+                      + (f"; {why}" if why else "") + ".")
 
     # 3. align and stack, all on the sharpest frame from the best source
     j.step(2, "running")
     ref_f = max(best, key=lambda f: (sources[f[1]]["up"] == 1, f[0]))
-    ref = next(img for si, k, img in each_frame({ref_f[1]}) if k == ref_f[2])
+    # The reference is the mean of the sharpest few frames of that source, lined up on the sharpest: a single
+    # frame's noise pulled the patch alignment around.
+    top = sorted((f for f in best if f[1] == ref_f[1]), key=lambda f: -f[0])[:REF_N]
+    refs = _read(each_frame, ref_f[1], [f[2] for f in top])
+    ref = refs.pop(ref_f[2])
     if sources[ref_f[1]]["up"] > 1:
         ref = cv2.resize(ref, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
     ref_small, scale = _gray_small(ref)
+    if refs:
+        acc_r = ref.astype("float64")
+        for img in refs.values():
+            if sources[ref_f[1]]["up"] > 1:
+                img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+            acc_r += cv2.warpAffine(img, _global_warp(ref_small, _gray_small(img)[0], scale), ref.shape[1::-1],
+                                    flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
+        ref = (acc_r / (len(refs) + 1)).astype("float32")
+        ref_small, scale = _gray_small(ref)
     ref_g = ref.mean(axis=2).astype("float32")
     h, w = ref_g.shape
     ref_mask = cv2.resize(_disc(ref_small)[0].astype("uint8"), (w, h), interpolation=cv2.INTER_NEAREST)
     disc_mask = ref_mask.astype(bool)
     wanted = {(f[1], f[2]) for f in best}
+    score_of = {(f[1], f[2]): f[0] for f in best}
     acc = np.zeros_like(ref, dtype="float64")
     wsum, done, by_kind = 0.0, 0, {"video": 0, "fits": 0}
     for si, k, img in each_frame({f[1] for f in best}):
@@ -557,8 +663,9 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
         lm = _local_map(ref_g, img.mean(axis=2).astype("float32"), ref_mask)
         if lm is not None:
             img = cv2.remap(img, lm[0], lm[1], cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-        acc += img * src["weight"]
-        wsum += src["weight"]
+        wgt = src["weight"] * score_of[(si, k)]  # sharper frames count for more
+        acc += img * wgt
+        wsum += wgt
         done += 1
         by_kind[src["kind"]] += 1
         j.part(2, done / len(best))
@@ -567,8 +674,9 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
     stack = (acc / max(1e-6, wsum)).astype("float32")
     mix = " and ".join(x for x in (f"{by_kind['video']} video frames" if by_kind["video"] else "",
                                    f"{by_kind['fits']} raw frames" if by_kind["fits"] else "") if x)
-    j.step(2, "done", f"Stacked {done} frames ({mix}): rotation and shift per frame, tones matched to the reference, "
-                      "then surface patches aligned one by one.")
+    j.step(2, "done", f"Stacked {done} frames ({mix}), sharper frames weighted higher: rotation and shift per frame onto "
+                      f"a reference averaged from the {len(top)} sharpest, tones matched, then 128 px surface patches "
+                      "aligned one by one.")
 
     # 4. sharpen
     j.step(3, "running")
@@ -588,34 +696,39 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
 
 
 def _sharpen(img, linear: bool, up: int):
-    """Richardson-Lucy with a Gaussian PSF, then a light multi-scale unsharp mask, limb protected."""
+    """The finish tuned on Kip's 2026-04-30 videos (3.1x the fine detail of Kip's AutoStakkert stack at a better
+    detail-to-noise ratio, no ringing): levels set, white balance on the highlands, an edge-preserving brightness
+    denoise, Richardson-Lucy (15 iterations, Gaussian PSF), three-scale detail gains, the limb protected."""
     import cv2
     import numpy as np
     x = np.clip(img, 0, None)
     lum0 = x.mean(axis=2)
     lit = lum0 > np.percentile(lum0, 99.5) * 0.25
-    if lit.any():  # the Moon is close to grey: balance the channels on the lit disc (the sensor itself is green-heavy)
-        means = np.array([x[..., c][lit].mean() for c in range(3)])
+    if lit.sum() > 100:  # the Moon is close to grey: balance the channels on the bright highlands (the sensor is green-heavy)
+        high = lit & (lum0 > np.percentile(lum0[lit], 60))
+        means = np.array([x[..., c][high].mean() for c in range(3)])
         x = x * (means.mean() / np.maximum(means, 1e-6))
     sky = float(np.percentile(lum0[~lit], 50)) if (~lit).any() else 0.0
     top = float(np.percentile(x[lit], 99.9)) if lit.any() else float(np.percentile(x, 99.95))
-    x = np.clip((x - sky) / max(1e-6, top - sky), 0, None)
-    sigma = 1.6 if up > 1 else 1.2
+    x = np.clip((x - sky) / max(1e-6, top - sky), 0, None).astype("float32")
+    base = x.copy()
+    lum = x.mean(axis=2).astype("float32")
+    den = cv2.bilateralFilter(lum, 0, 0.03, 1.5 * up)
+    x = x * (den / np.maximum(lum, 1e-5))[..., None]
+    sigma = 1.2 * up
     est = x.copy()
-    for _ in range(12):
+    for _ in range(15):
         conv = cv2.GaussianBlur(est, (0, 0), sigma)
         est = est * cv2.GaussianBlur(x / np.maximum(conv, 1e-4), (0, 0), sigma)
-    fine = est - cv2.GaussianBlur(est, (0, 0), 1.0)
-    mid = cv2.GaussianBlur(est, (0, 0), 1.0) - cv2.GaussianBlur(est, (0, 0), 3.0)
-    out = est + 0.6 * fine + 0.35 * mid
-    # Keep the limb and the dark sky clean: no ringing or halo outside the disc.
-    lum = x.mean(axis=2)
-    disc = cv2.GaussianBlur((lum > 0.06).astype("float32"), (0, 0), 3)[..., None]
-    out = out * disc + x * (1 - disc)
-    # The levels were set before sharpening (sky black, brightest crater rims white): keep them and clip the
-    # overshoot, so a few over-sharpened rims can't dim the whole Moon.
-    out = np.clip(out, 0, 1)
-    return out, f"Richardson-Lucy (12 iterations, PSF σ {sigma}) and a light two-scale sharpen; the limb and sky are protected from halos."
+    b1, b2, b3 = (cv2.GaussianBlur(est, (0, 0), s_ * up) for s_ in (1.0, 2.0, 4.0))
+    out = b3 + 1.2 * (b2 - b3) + 1.5 * (b1 - b2) + 1.8 * (est - b1)
+    # The limb and the dark sky stay as stacked: no ringing or halo outside the disc.
+    er = 17 * up
+    disc = (base.mean(axis=2) > np.percentile(base.mean(axis=2), 99.5) * 0.25).astype("uint8")
+    lm = cv2.GaussianBlur(cv2.erode(disc, np.ones((er, er), np.uint8)).astype("float32"), (0, 0), er / 2.2)[..., None]
+    out = np.clip(out * lm + base * (1 - lm), 0, 1)
+    return out, (f"white balance on the highlands, edge-preserving denoise, Richardson-Lucy (15 iterations, PSF σ {sigma:.1f}) "
+                 "and three-scale detail gains (fine +80%, medium +50%, coarse +20%); the limb and sky are protected from halos.")
 
 
 def _centre(img):
