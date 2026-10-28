@@ -1,6 +1,6 @@
 {
-  "version": "0.17.13",
-  "notes": "MOON STACK: re-running a night keeps the earlier result (moved into an 'earlier' folder, last three kept) instead of overwriting it.",
-  "sha256": "e46f40f37f5113c72b4559d621f23c549a3ea14a0b261b3aeb15898531477915",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.13.zip"
+  "version": "0.17.14",
+  "notes": "Moon: punchier, crisper finish (stronger maria/highland contrast, crisper crater rims and rays); fairer test of whether a smaller video or session adds detail.",
+  "sha256": "83dde82edfbf86246ceba587b9956f5c6d6634efdc5f5771a1a43bc70799dd2b",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.14.zip"
 }

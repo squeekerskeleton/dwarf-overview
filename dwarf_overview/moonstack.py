@@ -38,7 +38,7 @@ from . import dwarf, finishing, scope, tools
 OUT_W, OUT_H = 3840, 2160
 KEEP = 0.05            # share of each source's frames kept (5% beat 10% and 20% on Kip's 2026-04-30 videos)
 MOON_SAT = 0.8         # mineral-colour boost: 3x and 1.5x showed teal/pink false colour to Kip (2026-10-28); DWARF's own Moon images are near grey
-MOON_MEDIAN = 0.42     # disc median after the brightness curve (0.60 looked blown out to Kip)
+MOON_MEDIAN = 0.40     # disc median after the brightness curve (0.60 looked blown out to Kip; 0.38 showed maria noise)
 RL_ITERS = 30          # Richardson-Lucy iterations (2026-10-23 after the lighter denoise: 15/20/25/30 gave detail/noise 10.5/11.1/11.5/11.8; 40 rimmed crater walls)
 MAX_KEEP, MIN_KEEP = 1000, 50
 REF_N = 8              # the alignment reference is the mean of this many of the sharpest frames
@@ -506,8 +506,12 @@ def _screen(j, sources: list, ranked: dict, each_frame, target: tuple, trial: in
     f_small, f_sc = _gray_small(first)
     f_g = first.mean(axis=2).astype("float32")
     f_mask = cv2.resize(_disc(f_small)[0].astype("uint8"), f_g.shape[::-1], interpolation=cv2.INTER_NEAREST).astype(bool)
+    keep = getattr(j, "keep", KEEP)
+
+    def stacked(si):  # the frames this source would give the real stack
+        return float(min(len(ranked[si]), max(MIN_KEEP, round(len(ranked[si]) * keep))))
     used = [order[0]]
-    acc, wsum = first.astype("float64") * len(ranked[order[0]]), float(len(ranked[order[0]]))
+    acc, wsum = first.astype("float64") * stacked(order[0]), stacked(order[0])
     cur = _detail_noise(first)
     for si in order[1:]:
         img = stacks[si]
@@ -516,7 +520,7 @@ def _screen(j, sources: list, ranked: dict, each_frame, target: tuple, trial: in
         img = np.clip(cv2.warpAffine(img, _global_warp(f_small, _gray_small(img)[0], f_sc), first.shape[1::-1],
                                      flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE), 0, None)
         img = _tone_match(img, f_g, f_mask)
-        n = float(len(ranked[si]))
+        n = stacked(si)
         trial_s = _detail_noise(((acc + img * n) / (wsum + n)).astype("float32"))
         if trial_s > ADD_MIN * cur:  # a tie doesn't join
             used.append(si)
@@ -1030,8 +1034,8 @@ def _sharpen(img, linear: bool, up: int):
     else:
         ch = np.ones_like(x)
     out = np.clip(ch, 0, 3) * sharp_l[..., None]
-    # Brightness curve: white point at the disc's 99.97th percentile, a gamma that puts the disc median at 0.42, a soft
-    # shoulder from 0.82 and a gentle local contrast lift (deeper maria, brighter rays). 0.17.2 sat at median 0.60
+    # Brightness curve: white point at the disc's 99.97th percentile, a gamma that puts the disc median at 0.40, a soft
+    # shoulder from 0.82 and a local contrast lift (deeper maria, brighter rays). 0.17.2 sat at median 0.60
     # with 0.7% of the disc near white: Kip found it blown out.
     L = np.maximum(cv2.cvtColor(np.clip(out, 0, 4).astype("float32"), cv2.COLOR_RGB2GRAY), 1e-5)
     L1 = L / max(1e-5, float(np.percentile(L[dmk], 99.97)))
@@ -1039,7 +1043,10 @@ def _sharpen(img, linear: bool, up: int):
     gm = float(np.clip(np.log(MOON_MEDIAN) / np.log(med), 0.3, 3.0)) if 0 < med < 1 else 1.0
     L2 = L1 ** gm
     L2 = np.where(L2 > 0.82, 0.82 + 0.18 * np.tanh((L2 - 0.82) / 0.18), L2)
-    L2 = np.clip(L2 + 0.25 * (L2 - cv2.GaussianBlur(L2, (0, 0), 25.0 * up)) * dmk, 0, 1)
+    L2 = np.clip(L2 + 0.35 * (L2 - cv2.GaussianBlur(L2, (0, 0), 50.0 * up)) * dmk, 0, 1)
+    # A final crispening of the toned brightness, toward the look of DWARFLAB's own Moon images (crater rims and
+    # rays; 2026-10-28: fine detail +25% with no ringing and the same detail/noise).
+    L2 = np.clip(L2 + 0.3 * (L2 - cv2.GaussianBlur(L2, (0, 0), 0.7 * up)) * dmk, 0, 1)
     # True black (Kip, 2026-10-28: the sky beside the Moon held 1-2/255 of noise, "not a true black"). A black floor
     # measured well away from the Moon is taken off with a soft toe, then everything outside the Moon's outline (lit
     # part and any dark side, as one convex shape) is set to 0 with a soft edge.
