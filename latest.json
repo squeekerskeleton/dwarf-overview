@@ -1,6 +1,6 @@
 {
-  "version": "0.17.10",
-  "notes": "MOON STACK: a video or session joins only if it adds detail (none that costs resolution), the log says which were added and how many frames each gave, and raw frames are tone-matched before the alignment check.",
-  "sha256": "df60a2c0545dfc784a3f1d0133fef6da01d280b0883ee2dfca120525adb76632",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.10.zip"
+  "version": "0.17.11",
+  "notes": "MOON STACK: HD videos and raw sessions are now matched to the 4K video by the Moon's measured size (they were wrongly enlarged 2x, so none of their frames could be used).",
+  "sha256": "8336ec38523329681d33d01fa07d50379838959249d82bef95cbfe99a55cc4b3",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.11.zip"
 }

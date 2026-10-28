@@ -61,7 +61,9 @@ about 0.3 px), and do NOT drizzle or upsample the 4K video: the 8-bit H.265 fram
 measured worse). ImPPG equivalent: sigma about 1.2, light iterations, after a light denoise.
 - Never stack a softer video or photo session in with a sharper one: on 2026-04-30 adding a video whose median frame \
 was 0.58x as sharp cut the stack's sharpness from 0.102 to 0.075. MOON STACK now leaves such sources out on its own; \
-HD video and the raw 1920x1080 FITS (needing 2x upsampling to match 4K) only go in when they don't cost resolution.
+HD video and the raw 1920x1080 FITS only go in when they don't cost resolution. The DWARF 3 tele's 1080p video and raw \
+frames are a CROP at the same pixel scale as its 4K video (Moon radius 313 vs 323 px on 2026-10-23), not a downscaled frame: \
+never upscale them 2x; match the Moon's measured size.
 - Cubic-warped frames can go slightly negative at the limb; clip before any division (an app bug once made a black Moon).
 Capture lessons for capture_tips: prefer 4K video over 1080p; keep the whole disc well inside the frame (frames where it \
 touches the edge are dropped); check focus between videos (on 2026-04-30 one video was half as sharp as the next); \

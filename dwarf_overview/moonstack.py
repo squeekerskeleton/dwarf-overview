@@ -313,20 +313,20 @@ def _disc(g):
     return m, float(g[m].mean()) if m.any() else 0.0
 
 
-def _score(img) -> tuple[float, float, bool]:
-    """Sharpness (Laplacian energy inside the disc, relative to brightness), brightness, and whether the disc
-    touches the edge of the frame."""
+def _score(img) -> tuple[float, float, bool, float]:
+    """Sharpness (Laplacian energy inside the disc, relative to brightness), brightness, whether the disc touches
+    the edge of the frame, and the disc's radius as a share of the frame width."""
     import cv2
     import numpy as np
     g, _ = _gray_small(img)
     m, bright = _disc(g)
     if m.mean() < 0.005 or m.mean() > 0.7:  # no Moon, or glare/cloud filling the frame
-        return 0.0, bright, True
+        return 0.0, bright, True, 0.0
     inner = cv2.erode(m.astype("uint8"), np.ones((7, 7), np.uint8)).astype(bool)
     lap = cv2.Laplacian(g, cv2.CV_32F)
     s = float(np.sqrt(np.mean(lap[inner] ** 2)) / max(bright, 1e-4)) if inner.any() else 0.0
     edge = bool(m[0].any() or m[-1].any() or m[:, 0].any() or m[:, -1].any())
-    return s, bright, edge
+    return s, bright, edge, float(np.sqrt(m.sum() / np.pi) / g.shape[1])
 
 
 def _global_warp(ref_small, img_small, scale: float):
@@ -429,6 +429,28 @@ def _detail_noise(img) -> float:
     return band / max(1e-6, noise)
 
 
+def _fit_to(img, s: float, shape: tuple):
+    """A frame resized by s (its Moon to the reference's size) and placed on a frame of the given shape, cropped
+    around the Moon or padded with the edge's own sky."""
+    import cv2
+    if s != 1.0:
+        img = cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_CUBIC if s > 1 else cv2.INTER_AREA)
+    H, W = shape
+    h, w = img.shape[:2]
+    if h > H or w > W:
+        g, k = _gray_small(img)
+        m = _disc(g)[0]
+        cy, cx = ((float(v.mean()) / k for v in m.nonzero()) if m.any() else (h / 2, w / 2))
+        y0 = int(min(max(0, round(cy - H / 2)), max(0, h - H)))
+        x0 = int(min(max(0, round(cx - W / 2)), max(0, w - W)))
+        img = img[y0:y0 + H, x0:x0 + W]
+        h, w = img.shape[:2]
+    if (h, w) != (H, W):
+        t, l = (H - h) // 2, (W - w) // 2
+        img = cv2.copyMakeBorder(img, t, H - h - t, l, W - w - l, cv2.BORDER_REPLICATE)
+    return img
+
+
 def _read(each_frame, si: int, keys: list) -> dict:
     """The given frames of one source, read in one pass (stopping once all are found)."""
     want, out = set(keys), {}
@@ -443,7 +465,7 @@ def _read(each_frame, si: int, keys: list) -> dict:
     return out
 
 
-def _screen(j, sources: list, ranked: dict, each_frame, trial: int = 20) -> tuple[list, str]:
+def _screen(j, sources: list, ranked: dict, each_frame, target: tuple, trial: int = 20) -> tuple[list, str]:
     """Which sources to stack: never one that costs resolution (Kip: "if it degrades resolution, do not stack
     together"). A source whose median frame is well below the sharpest source of the same size is left out (on
     2026-04-30 one video's 0.032 against 0.055; stacking it in cut the sharpness from 0.102 to 0.075). Then each
@@ -455,7 +477,7 @@ def _screen(j, sources: list, ranked: dict, each_frame, trial: int = 20) -> tupl
     left, notes = [], []
     med = {si: float(np.median([f[0] for f in fr])) for si, fr in ranked.items()}
     for si in list(ranked):
-        same = [o for o in ranked if sources[o]["up"] == sources[si]["up"]]
+        same = [o for o in ranked if abs(sources[o]["s"] / sources[si]["s"] - 1) < 0.2]
         top = max(med[o] for o in same)
         if med[si] < SOFT * top:
             left.append(si)
@@ -466,9 +488,7 @@ def _screen(j, sources: list, ranked: dict, each_frame, trial: int = 20) -> tupl
     j.log("Testing whether each video and session adds detail or blurs it…")
     stacks = {}
     for si in cand:
-        imgs = list(_read(each_frame, si, [f[2] for f in ranked[si][:trial]]).values())
-        if sources[si]["up"] > 1:
-            imgs = [cv2.resize(i, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC) for i in imgs]
+        imgs = [_fit_to(i, sources[si]["s"], target) for i in _read(each_frame, si, [f[2] for f in ranked[si][:trial]]).values()]
         if not imgs:
             continue
         r_small, sc = _gray_small(imgs[0])
@@ -496,7 +516,7 @@ def _screen(j, sources: list, ranked: dict, each_frame, trial: int = 20) -> tupl
         img = _tone_match(img, f_g, f_mask)
         n = float(len(ranked[si]))
         trial_s = _detail_noise(((acc + img * n) / (wsum + n)).astype("float32"))
-        if trial_s >= ADD_MIN * cur:
+        if trial_s > ADD_MIN * cur:  # a tie doesn't join
             used.append(si)
             notes.append(f"{sources[si]['name']} added (detail/noise {cur:.1f} to {trial_s:.1f})")
             acc, wsum, cur = acc + img * n, wsum + n, trial_s
@@ -645,13 +665,15 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
         videos = []
     if not videos and not fits:
         raise MoonError("None of that night's shots can be stacked here (no Moon videos or raw Moon sessions).")
-    # Everything is brought to 4K: 4K videos as they are, HD videos and raw FITS (1920x1080) at 2x.
+    # Everything is brought to the scale of the reference source's Moon, measured (below), not assumed from the frame
+    # size: the DWARF 3's 1080p video and raw frames are a crop at the same scale as its 4K video, and the 2x
+    # upscaling assumed until 0.17.10 doubled their Moon (the ghost of 2026-10-23, and every HD/raw frame rejected).
     sources = []
     for v in videos:
         w, h, n = vinfo[v["name"]]
-        sources.append({**v, "up": 1 if w >= 3000 else 2, "n": n, "weight": 1.0 if w >= 3000 else 0.6})
+        sources.append({**v, "up": 1, "s": 1.0, "shape": (h, w), "n": n, "weight": 1.0 if w >= 3000 else 0.6})
     for f in fits:
-        sources.append({**f, "up": 2, "n": f.get("frames") or 120, "weight": 0.7})
+        sources.append({**f, "up": 1, "s": 1.0, "shape": None, "n": f.get("frames") or 120, "weight": 0.7})
     total = sum(s["n"] for s in sources)
     parts = []
     nv, nf = sum(s["n"] for s in sources if s["kind"] == "video"), sum(s["n"] for s in sources if s["kind"] == "fits")
@@ -685,14 +707,18 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
     # 2. score every frame
     j.step(1, "running")
     frames = []  # (score, source, frame key, brightness)
+    radius: dict = {}  # source -> [(score, disc radius as a share of the frame width)]
     n = 0
     for si, k, img in each_frame(width=960):  # _score works at 960 px wide anyway
         j.wait_if_paused()
         if j.stopped():
             raise MoonError("Stopped.")
-        s, bright, edge = _score(img)
+        s, bright, edge, rel = _score(img)
+        if sources[si]["shape"] is None:
+            sources[si]["shape"] = img.shape[:2]
         if s > 0 and not edge:
             frames.append((s, si, k, bright))
+            radius.setdefault(si, []).append((s, rel))
         n += 1
         if n % 50 == 0:
             j.part(1, n / max(1, total))
@@ -700,7 +726,19 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
         raise MoonError("Fewer than 5 usable Moon frames (the disc was missing, cut off by the frame edge or lost in glare).")
     # Each source is ranked against itself (resolution, exposure and gain differ), and the best 5% of each kept.
     ranked = {si: sorted((f for f in frames if f[1] == si), key=lambda f: -f[0]) for si in sorted({f[1] for f in frames})}
-    used, why = _screen(j, sources, ranked, each_frame)
+    # The Moon's size in each source (median of its 20 sharpest frames, in native pixels); every source is resized
+    # to the size in the widest, sharpest source.
+    r_nat = {si: float(np.median([r for _, r in sorted(radius[si], key=lambda t: -t[0])[:20]])) * sources[si]["shape"][1]
+             for si in ranked}
+    ref_si = max(ranked, key=lambda si: (sources[si]["shape"][1], float(np.median([f[0] for f in ranked[si]]))))
+    for si in ranked:
+        sc_ = r_nat[ref_si] / max(1.0, r_nat[si])
+        sources[si]["s"] = 1.0 if abs(sc_ - 1) < 0.03 else sc_
+    target = tuple(sources[ref_si]["shape"])
+    used, why = _screen(j, sources, ranked, each_frame, target)
+    sized = [f"{sources[si]['name']} x{sources[si]['s']:.2f}" for si in used if sources[si]["s"] != 1.0]
+    if sized:
+        why = (why + "; " if why else "") + "Moon size matched to the reference: " + ", ".join(sized)
     best = []
     for si in used:
         mine = ranked[si]
@@ -711,20 +749,17 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
 
     # 3. align and stack, all on the sharpest frame from the best source
     j.step(2, "running")
-    ref_f = max(best, key=lambda f: (sources[f[1]]["up"] == 1, f[0]))
+    ref_f = max(best, key=lambda f: (f[1] == ref_si, f[0]))
     # The reference is the mean of the sharpest few frames of that source, lined up on the sharpest: a single
     # frame's noise pulled the patch alignment around.
     top = sorted((f for f in best if f[1] == ref_f[1]), key=lambda f: -f[0])[:REF_N]
     refs = _read(each_frame, ref_f[1], [f[2] for f in top])
-    ref = refs.pop(ref_f[2])
-    if sources[ref_f[1]]["up"] > 1:
-        ref = cv2.resize(ref, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    ref = _fit_to(refs.pop(ref_f[2]), sources[ref_f[1]]["s"], target)
     ref_small, scale = _gray_small(ref)
     if refs:
         acc_r = ref.astype("float64")
         for img in refs.values():
-            if sources[ref_f[1]]["up"] > 1:
-                img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+            img = _fit_to(img, sources[ref_f[1]]["s"], target)
             acc_r += np.clip(cv2.warpAffine(img, _global_warp(ref_small, _gray_small(img)[0], scale), ref.shape[1::-1],
                                             flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE), 0, None)
         ref = (acc_r / (len(refs) + 1)).astype("float32")
@@ -750,10 +785,7 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
         if j.stopped():
             raise MoonError("Stopped.")
         src = sources[si]
-        if src["up"] > 1:
-            img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-        if img.shape[:2] != (h, w):  # a different resolution than the reference: fit it
-            img = cv2.resize(img, (w, h), interpolation=cv2.INTER_CUBIC)
+        img = _fit_to(img, src["s"], (h, w))
         small, _ = _gray_small(img)
         warp = _global_warp(ref_small, small, scale)
         img = np.clip(cv2.warpAffine(img, warp, (w, h), flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP,
