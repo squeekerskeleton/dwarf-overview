@@ -1,6 +1,6 @@
 {
-  "version": "0.17.5",
-  "notes": "Moon: true black sky around the disc, colour toned down to 1.8x and kept off the limb (no teal/pink edge tints).",
-  "sha256": "22f0595b814cff5a0b519ba3f97703bc567d68b9fd6dbf285ebbbf157b12ec87",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.5.zip"
+  "version": "0.17.6",
+  "notes": "Moon: near-grey natural colour like DWARF's own Moon shots, deeper maria and brighter rays, crisper highland texture, black floor removed so the sky and the dark limb edge are truly black.",
+  "sha256": "0f14fff5441b7a6ff9c6d1702c885f6fa0127cc9131532a47b54462bc0db839e",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.6.zip"
 }

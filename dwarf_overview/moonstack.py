@@ -37,8 +37,8 @@ from . import dwarf, finishing, scope, tools
 
 OUT_W, OUT_H = 3840, 2160
 KEEP = 0.05            # share of each source's frames kept (5% beat 10% and 20% on Kip's 2026-04-30 videos)
-MOON_SAT = 1.8         # mineral-colour boost (3x read as false colour to Kip on 2026-10-28; DWARF's own Moon images are near grey)
-MOON_MEDIAN = 0.48     # disc median after the brightness curve (0.60 looked blown out to Kip)
+MOON_SAT = 0.8         # mineral-colour boost: 3x and 1.5x showed teal/pink false colour to Kip (2026-10-28); DWARF's own Moon images are near grey
+MOON_MEDIAN = 0.42     # disc median after the brightness curve (0.60 looked blown out to Kip)
 MAX_KEEP, MIN_KEEP = 1000, 50
 REF_N = 8              # the alignment reference is the mean of this many of the sharpest frames
 ADD_MIN = 0.98         # a further source joins only if the combined stack keeps this share of the sharpness
@@ -912,7 +912,7 @@ def _sharpen(img, linear: bool, up: int):
     gray = cv2.cvtColor(np.clip(x, 0, None), cv2.COLOR_RGB2GRAY)
     kg = float(gray[dmk].mean() / max(1e-6, x[..., 1][dmk].mean()))
     lum = (x[..., 1] * kg).astype("float32")
-    den = cv2.bilateralFilter(lum, 0, 0.03, 1.5 * up)
+    den = cv2.bilateralFilter(lum, 0, 0.015, 1.5 * up)  # 0.03 smeared highland texture (2026-10-28)
     sigma = 1.2 * up
     est = den.copy()
     for _ in range(15):
@@ -955,35 +955,45 @@ def _sharpen(img, linear: bool, up: int):
     else:
         ch = np.ones_like(x)
     out = np.clip(ch, 0, 3) * sharp_l[..., None]
-    # Brightness curve: white point at the disc's 99.97th percentile, a gamma that puts the disc median at 0.48 and a
-    # soft shoulder from 0.82 (0.17.2 sat at median 0.60 with 0.7% of the disc near white: Kip found it blown out).
+    # Brightness curve: white point at the disc's 99.97th percentile, a gamma that puts the disc median at 0.42, a soft
+    # shoulder from 0.82 and a gentle local contrast lift (deeper maria, brighter rays). 0.17.2 sat at median 0.60
+    # with 0.7% of the disc near white: Kip found it blown out.
     L = np.maximum(cv2.cvtColor(np.clip(out, 0, 4).astype("float32"), cv2.COLOR_RGB2GRAY), 1e-5)
     L1 = L / max(1e-5, float(np.percentile(L[dmk], 99.97)))
     med = float(np.median(L1[dmk]))
     gm = float(np.clip(np.log(MOON_MEDIAN) / np.log(med), 0.3, 3.0)) if 0 < med < 1 else 1.0
     L2 = L1 ** gm
     L2 = np.where(L2 > 0.82, 0.82 + 0.18 * np.tanh((L2 - 0.82) / 0.18), L2)
-    out = np.clip(out * (L2 / L)[..., None], 0, 1).astype("float32")
-    # True black sky (Kip, 2026-10-28: the sky held 1-2/255 of noise beside the Moon, "not a true black"): everything
-    # outside the Moon's outline (lit part and any dark side, as one convex shape) set to 0, with a 2 px soft edge.
-    seen = (cv2.cvtColor(out, cv2.COLOR_RGB2GRAY) > 0.03).astype("uint8")
+    L2 = np.clip(L2 + 0.25 * (L2 - cv2.GaussianBlur(L2, (0, 0), 25.0 * up)) * dmk, 0, 1)
+    # True black (Kip, 2026-10-28: the sky beside the Moon held 1-2/255 of noise, "not a true black"). A black floor
+    # measured well away from the Moon is taken off with a soft toe, then everything outside the Moon's outline (lit
+    # part and any dark side, as one convex shape) is set to 0 with a soft edge.
+    shape = None
+    seen = (L2 > 0.03).astype("uint8")
     n_, lab, st, _ = cv2.connectedComponentsWithStats(seen, 8)
     if n_ > 1:
         big = 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA]))
-        pts = cv2.findNonZero((lab == big).astype("uint8"))
         shape = np.zeros_like(seen)
-        cv2.fillConvexPoly(shape, cv2.convexHull(pts), 1)
-        g3 = 3 * up
-        shape = cv2.dilate(shape, np.ones((g3, g3), np.uint8)).astype("float32")
-        out = out * cv2.GaussianBlur(shape, (0, 0), 1.0 * up)[..., None]
+        cv2.fillConvexPoly(shape, cv2.convexHull(cv2.findNonZero((lab == big).astype("uint8"))), 1)
+        far = cv2.dilate(shape, np.ones((101 * up, 101 * up), np.uint8)) == 0
+        bp = float(np.percentile(L2[far], 99.5)) if far.sum() > 1000 else 0.0
+        if 0 < bp < 0.2:
+            t = 3 * bp
+            ln = np.where(L2 < t, np.clip(L2 - bp, 0, None) ** 2 / (2 * (t - bp)), L2 - bp - (t - bp) / 2)
+            L2 = (ln / (1 - bp - (t - bp) / 2)).astype("float32")
+    out = np.clip(out * (L2 / L)[..., None], 0, 1).astype("float32")
+    if shape is not None:
+        g7 = 7 * up
+        shape = cv2.dilate(shape, np.ones((g7, g7), np.uint8)).astype("float32")
+        out = out * cv2.GaussianBlur(shape, (0, 0), 1.5 * up)[..., None]
     rgb = getattr(_align_channels, "last", [])
     return out, ((f"colour channels lined up (atmospheric dispersion: {', '.join(rgb)}); " if rgb else "")
                  + "sky removed (it ends black); "
                  + f"white balance on the highlands, edge-preserving denoise, Richardson-Lucy (15 iterations, PSF σ {sigma:.1f}) "
                  "and three-scale detail gains (fine +80%, medium +50%, coarse +20%) on the brightness (from green); "
-                 f"natural mineral colour boosted {MOON_SAT:g}x (twilight and brightness-linked colour removed, highlands "
+                 f"natural mineral colour kept faint ({MOON_SAT:g}x) (twilight and brightness-linked colour removed, highlands "
                  f"neutral, none where the video clipped); brightness curve to a disc median of {MOON_MEDIAN:g} with a soft "
-                 "highlight shoulder; the limb and sky are protected from halos and the sky is set to true black.")
+                 "highlight shoulder and a gentle local contrast lift; the limb and sky are protected from halos and the sky is set to true black.")
 
 
 def _centre(img):
