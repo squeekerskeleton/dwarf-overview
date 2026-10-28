@@ -913,7 +913,18 @@ def _sharpen(img, linear: bool, up: int):
     gray = cv2.cvtColor(np.clip(x, 0, None), cv2.COLOR_RGB2GRAY)
     kg = float(gray[dmk].mean() / max(1e-6, x[..., 1][dmk].mean()))
     lum = (x[..., 1] * kg).astype("float32")
-    den = cv2.bilateralFilter(lum, 0, 0.015, 1.5 * up)  # 0.03 smeared highland texture (2026-10-28)
+    # The denoise follows the stack's measured noise (on the calmest 10% of the disc): 0.015 suited the 2026-10-23
+    # video and 0.0225 the noisier 04-30 one; both fit about 15x the noise. 0.03 on 10-23 smeared highland texture.
+    res = lum - cv2.GaussianBlur(lum, (0, 0), 1.0 * up)
+    e25 = 25 * up
+    dmn = dmk & (cv2.erode(disc, np.ones((e25, e25), np.uint8)) > 0)
+    sc = 0.015
+    if dmn.sum() > 1000:
+        flat = cv2.GaussianBlur(np.abs(lum - cv2.GaussianBlur(lum, (0, 0), 4.0 * up)), (0, 0), 8.0 * up)
+        sel = dmn & (flat < np.percentile(flat[dmn], 10))
+        r = res[sel]
+        sc = float(np.clip(15 * 1.4826 * np.median(np.abs(r - np.median(r))), 0.01, 0.04))
+    den = cv2.bilateralFilter(lum, 0, sc, 1.5 * up)
     sigma = 1.2 * up
     est = den.copy()
     for _ in range(RL_ITERS):
@@ -931,8 +942,7 @@ def _sharpen(img, linear: bool, up: int):
     s6 = 6.0 * up
     l6 = np.maximum(cv2.GaussianBlur(lum, (0, 0), s6), 1e-3)
     ch = cv2.GaussianBlur(x, (0, 0), s6) / l6[..., None]
-    e25 = 25 * up
-    dm = dmk & (cv2.erode(disc, np.ones((e25, e25), np.uint8)) > 0)
+    dm = dmn
     if dm.sum() > 1000:
         h, w = lum.shape
         yy, xx = np.mgrid[0:h, 0:w].astype("float32")
@@ -990,7 +1000,7 @@ def _sharpen(img, linear: bool, up: int):
     rgb = getattr(_align_channels, "last", [])
     return out, ((f"colour channels lined up (atmospheric dispersion: {', '.join(rgb)}); " if rgb else "")
                  + "sky removed (it ends black); "
-                 + f"white balance on the highlands, edge-preserving denoise, Richardson-Lucy ({RL_ITERS} iterations, PSF σ {sigma:.1f}) "
+                 + f"white balance on the highlands, edge-preserving denoise (strength {sc:.3f}, set from the measured noise), Richardson-Lucy ({RL_ITERS} iterations, PSF σ {sigma:.1f}) "
                  "and three-scale detail gains (fine +80%, medium +50%, coarse +20%) on the brightness (from green); "
                  f"natural mineral colour kept faint ({MOON_SAT:g}x) (twilight and brightness-linked colour removed, highlands "
                  f"neutral, none where the video clipped); brightness curve to a disc median of {MOON_MEDIAN:g} with a soft "
