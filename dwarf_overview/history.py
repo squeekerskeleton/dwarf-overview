@@ -210,9 +210,9 @@ def context_for(shot_info: dict, mode: str = "deepsky", limit: int = 12) -> str:
 # Every finished run is measured and logged, so the next run of the same kind of target can say whether it beat the
 # best so far, and the advice can see which runs the owner liked. The owner's rating outranks the measurements.
 
-KEY = {"deepsky": ("contrast", "nebula-to-sky-noise contrast"), "moon": ("sharpness", "fine-detail sharpness")}
+KEY = {"deepsky": ("contrast", "nebula-to-sky-noise contrast"), "moon": ("detail_noise", "detail-to-noise")}
 LABELS = {"contrast": "contrast", "sky_noise": "sky noise", "sky": "sky level", "flatness": "background unevenness",
-          "sharpness": "sharpness", "noise": "noise", "clipped_pct": "clipped %"}
+          "sharpness": "sharpness", "detail_noise": "detail-to-noise", "noise": "noise", "clipped_pct": "clipped %"}
 LOWER_BETTER = {"sky_noise", "flatness", "noise", "clipped_pct"}
 
 

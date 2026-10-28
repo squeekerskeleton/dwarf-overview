@@ -1,6 +1,6 @@
 {
-  "version": "0.17.1",
-  "notes": "Moon stack: works with a bright dusk or hazy sky (the sky is measured and removed, so it ends black and doesn't tint the Moon), drops frames that didn't line up (no ghost Moon), and copies shots off the DWARF before stacking so unplugging it mid-run can't break the run.",
-  "sha256": "84553d7eccc685d4984443c4260227237c9e8f773d018ce75505970a91726f99",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.1.zip"
+  "version": "0.17.2",
+  "notes": "Moon stack: chooses videos and photo sessions by detail-to-noise (a noisier source no longer counts as sharper), sharpens brightness only with the colour carried over smoothly (no cyan or pink edges after a dusk sky), lines up the colour channels, and tones the Moon's colour down to near-grey.",
+  "sha256": "0f56a61e19ebf07909dcc483a704d9094bfb54da397e037457d369ffb67970f2",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.2.zip"
 }

@@ -392,7 +392,35 @@ def _sharpness(img, mask=None) -> float:
     if inner.sum() < 1000:
         return 0.0
     lap = cv2.Laplacian(cv2.GaussianBlur(g, (0, 0), 0.7), cv2.CV_32F)
-    return float(np.sqrt(np.mean(lap[inner] ** 2)) / max(1e-6, float(g[inner].mean())))
+    # relative to the disc's brightness above the sky: a bright dusk sky made 2026-10-23's videos look softer
+    return float(np.sqrt(np.mean(lap[inner] ** 2)) / max(1e-6, float(g[inner].mean()) - _sky_level(g)))
+
+
+def _detail_noise(img) -> float:
+    """Surface detail over noise at a common 650 px disc: the RMS of a σ1-σ3 band-pass on the inner disc, over the
+    MAD of the finest (σ<1) residual on the smoothest tenth of it (the maria). Plain sharpness rewards noise: on
+    2026-10-23 the noisier 17:53 video scored sharper, yet adding it cut the stack's detail/noise from 14.8 to 11.3."""
+    import cv2
+    import numpy as np
+    g = img.mean(axis=2).astype("float32") if img.ndim == 3 else img.astype("float32")
+    g = np.clip(g - _sky_level(g), 0, None)
+    mask = _disc_mask(g)
+    ys, xs = np.nonzero(mask)
+    if ys.size < 1000:
+        return 0.0
+    s = 650 / max(1, max(ys.max() - ys.min(), xs.max() - xs.min()))
+    g = cv2.resize(g, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+    mask = cv2.resize(mask.astype("uint8"), g.shape[::-1], interpolation=cv2.INTER_NEAREST)
+    inner = cv2.erode(mask, np.ones((25, 25), np.uint8)).astype(bool)
+    if inner.sum() < 1000:
+        return 0.0
+    b1, b3 = cv2.GaussianBlur(g, (0, 0), 1.0), cv2.GaussianBlur(g, (0, 0), 3.0)
+    band = float(np.sqrt(np.mean((b1 - b3)[inner] ** 2)))
+    fine = g - b1
+    calm = cv2.GaussianBlur(np.abs(b1 - b3), (0, 0), 8)
+    maria = inner & (calm <= np.percentile(calm[inner], 10))
+    noise = 1.4826 * float(np.median(np.abs(fine[maria] - np.median(fine[maria])))) if maria.sum() > 100 else 0.0
+    return band / max(1e-6, noise)
 
 
 def _read(each_frame, si: int, keys: list) -> dict:
@@ -414,7 +442,8 @@ def _screen(j, sources: list, ranked: dict, each_frame, trial: int = 20) -> tupl
     together"). A source whose median frame is well below the sharpest source of the same size is left out (on
     2026-04-30 one video's 0.032 against 0.055; stacking it in cut the sharpness from 0.102 to 0.075). Then each
     source's best frames are stacked on their own at the common 4K scale, and, sharpest first, each next source
-    joins only if the combined stack keeps ADD_MIN of the sharpness. Returns (source indexes, note)."""
+    joins only if the combined stack keeps ADD_MIN of the detail-to-noise ratio (_detail_noise). Returns (source
+    indexes, note)."""
     import cv2
     import numpy as np
     left, notes = [], []
@@ -444,14 +473,14 @@ def _screen(j, sources: list, ranked: dict, each_frame, trial: int = 20) -> tupl
             acc += np.clip(cv2.warpAffine(img, _global_warp(r_small, _gray_small(img)[0], sc), imgs[0].shape[1::-1],
                                           flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE), 0, None)
         stacks[si] = (acc / len(imgs)).astype("float32")
-    order = sorted(stacks, key=lambda si: -_sharpness(stacks[si]))
+    order = sorted(stacks, key=lambda si: -_detail_noise(stacks[si]))
     first = stacks[order[0]]
     f_small, f_sc = _gray_small(first)
     f_g = first.mean(axis=2).astype("float32")
     f_mask = cv2.resize(_disc(f_small)[0].astype("uint8"), f_g.shape[::-1], interpolation=cv2.INTER_NEAREST).astype(bool)
     used = [order[0]]
     acc, wsum = first.astype("float64") * len(ranked[order[0]]), float(len(ranked[order[0]]))
-    cur = _sharpness(first)
+    cur = _detail_noise(first)
     for si in order[1:]:
         img = stacks[si]
         if img.shape != first.shape:
@@ -460,12 +489,12 @@ def _screen(j, sources: list, ranked: dict, each_frame, trial: int = 20) -> tupl
                                      flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE), 0, None)
         img = _tone_match(img, f_g, f_mask)
         n = float(len(ranked[si]))
-        trial_s = _sharpness(((acc + img * n) / (wsum + n)).astype("float32"))
+        trial_s = _detail_noise(((acc + img * n) / (wsum + n)).astype("float32"))
         if trial_s >= ADD_MIN * cur:
             used.append(si)
             acc, wsum, cur = acc + img * n, wsum + n, trial_s
         else:
-            notes.append(f"{sources[si]['name']} left out (it would blur the stack: sharpness {trial_s:.3f} against {cur:.3f})")
+            notes.append(f"{sources[si]['name']} left out (it would lower the detail: detail/noise {trial_s:.1f} against {cur:.1f})")
     for si in cand:
         if si not in stacks:
             used.append(si)  # couldn't be tested: keep the old behaviour
@@ -795,8 +824,7 @@ def _moon_metrics(img) -> dict:
     flat = inner & (local <= np.percentile(local[inner], 10)) if inner.any() else inner
     noise = 1.4826 * float(np.median(np.abs(hp[flat] - np.median(hp[flat])))) if flat.sum() > 100 else 0.0
     sharp = _sharpness(small, smask)
-    return {"sharpness": round(sharp, 4), "noise": round(noise, 5),
-            "detail_noise": round(sharp / max(1e-6, noise) / 100, 2),
+    return {"sharpness": round(sharp, 4), "noise": round(noise, 5), "detail_noise": round(_detail_noise(img), 2),
             "clipped_pct": round(float((g[mask] >= 0.999).mean() * 100), 3)}
 
 
@@ -830,13 +858,33 @@ def _remove_sky(x):
     return np.clip(out, 0, None).astype("float32")
 
 
+def _align_channels(x):
+    """Low in the sky the air spreads the Moon's colours a little (atmospheric dispersion): red and blue images sit
+    a fraction of a pixel apart, which shows as cyan and pink fringes on bright edges (2026-10-23, Moon low at dusk).
+    Red and blue are shifted onto green, as RegiStax's RGB align does."""
+    import cv2
+    import numpy as np
+    g = x[..., 1].astype("float32")
+    win = cv2.createHanningWindow(g.shape[::-1], cv2.CV_32F)
+    out = x.copy()
+    notes = []
+    for c in (0, 2):
+        (dx, dy), resp = cv2.phaseCorrelate(g.copy(), x[..., c].astype("float32").copy(), win)
+        if resp > 0.2 and 0.05 < np.hypot(dx, dy) < 4:
+            m = np.float32([[1, 0, -dx], [0, 1, -dy]])
+            out[..., c] = cv2.warpAffine(x[..., c], m, g.shape[::-1], flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+            notes.append(f"{'red' if c == 0 else 'blue'} {np.hypot(dx, dy):.2f} px")
+    _align_channels.last = notes
+    return np.clip(out, 0, None)
+
+
 def _sharpen(img, linear: bool, up: int):
     """The finish tuned on Kip's 2026-04-30 videos (3.1x the fine detail of Kip's AutoStakkert stack at a better
     detail-to-noise ratio, no ringing): levels set, white balance on the highlands, an edge-preserving brightness
     denoise, Richardson-Lucy (15 iterations, Gaussian PSF), three-scale detail gains, the limb protected."""
     import cv2
     import numpy as np
-    x = _remove_sky(np.clip(img, 0, None))
+    x = _align_channels(_remove_sky(np.clip(img, 0, None)))
     lum0 = x.mean(axis=2)
     lit = _disc_mask(lum0)
     if lit.sum() > 100:  # the Moon is close to grey: balance the channels on the bright highlands (the sensor is green-heavy)
@@ -848,16 +896,21 @@ def _sharpen(img, linear: bool, up: int):
     top = float(np.percentile(xc[lit], 99.9)) if lit.any() else float(np.percentile(xc, 99.95))
     x = np.clip((x - sky) / max(1e-6, top - sky), 0, 1.5).astype("float32")
     base = x.copy()
+    # Sharpen the brightness only and carry the colour over smoothly: after a dusk sky is removed the blue channel is
+    # noisy, and sharpening each channel made cyan highlights and pink highlands (2026-10-23). The Moon is nearly
+    # grey, so its colour is also toned down to 40%.
     lum = x.mean(axis=2).astype("float32")
     den = cv2.bilateralFilter(lum, 0, 0.03, 1.5 * up)
-    x = x * (den / np.maximum(lum, 1e-5))[..., None]
     sigma = 1.2 * up
-    est = x.copy()
+    est = den.copy()
     for _ in range(15):
         conv = cv2.GaussianBlur(est, (0, 0), sigma)
-        est = est * cv2.GaussianBlur(x / np.maximum(conv, 1e-4), (0, 0), sigma)
+        est = est * cv2.GaussianBlur(den / np.maximum(conv, 1e-4), (0, 0), sigma)
     b1, b2, b3 = (cv2.GaussianBlur(est, (0, 0), s_ * up) for s_ in (1.0, 2.0, 4.0))
-    out = b3 + 1.2 * (b2 - b3) + 1.5 * (b1 - b2) + 1.8 * (est - b1)
+    sharp_l = b3 + 1.2 * (b2 - b3) + 1.5 * (b1 - b2) + 1.8 * (est - b1)
+    chroma = cv2.GaussianBlur(x, (0, 0), 2) / np.maximum(cv2.GaussianBlur(lum, (0, 0), 2), 1e-4)[..., None]
+    chroma = 1 + 0.4 * (np.clip(chroma, 0, 3) - 1)
+    out = chroma * sharp_l[..., None]
     # The limb and the dark sky stay as stacked: no ringing or halo outside the disc.
     er = 17 * up
     disc = _disc_mask(base.mean(axis=2)).astype("uint8")
@@ -866,8 +919,12 @@ def _sharpen(img, linear: bool, up: int):
     # A soft shoulder instead of a hard clip: 0.16.1 clipped 0.77% of the disc (Tycho and the brightest rays).
     out = np.where(out > 0.9, 0.9 + 0.1 * np.tanh((out - 0.9) / 0.1), out)
     out = np.clip(out, 0, 1)
-    return out, (f"white balance on the highlands, edge-preserving denoise, Richardson-Lucy (15 iterations, PSF σ {sigma:.1f}) "
-                 "and three-scale detail gains (fine +80%, medium +50%, coarse +20%); the limb and sky are protected from halos.")
+    rgb = getattr(_align_channels, "last", [])
+    return out, ((f"colour channels lined up (atmospheric dispersion: {', '.join(rgb)}); " if rgb else "")
+                 + "sky removed (it ends black); "
+                 + f"white balance on the highlands, edge-preserving denoise, Richardson-Lucy (15 iterations, PSF σ {sigma:.1f}) "
+                 "and three-scale detail gains (fine +80%, medium +50%, coarse +20%) on the brightness only, colour carried "
+                 "over smoothly and toned down; the limb and sky are protected from halos.")
 
 
 def _centre(img):
