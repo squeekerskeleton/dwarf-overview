@@ -39,6 +39,7 @@ OUT_W, OUT_H = 3840, 2160
 KEEP = 0.05            # share of each source's frames kept (5% beat 10% and 20% on Kip's 2026-04-30 videos)
 MOON_SAT = 0.8         # mineral-colour boost: 3x and 1.5x showed teal/pink false colour to Kip (2026-10-28); DWARF's own Moon images are near grey
 MOON_MEDIAN = 0.42     # disc median after the brightness curve (0.60 looked blown out to Kip)
+RL_ITERS = 30          # Richardson-Lucy iterations (2026-10-23 after the lighter denoise: 15/20/25/30 gave detail/noise 10.5/11.1/11.5/11.8; 40 rimmed crater walls)
 MAX_KEEP, MIN_KEEP = 1000, 50
 REF_N = 8              # the alignment reference is the mean of this many of the sharpest frames
 ADD_MIN = 0.98         # a further source joins only if the combined stack keeps this share of the sharpness
@@ -886,7 +887,7 @@ def _align_channels(x):
 def _sharpen(img, linear: bool, up: int):
     """The finish tuned on Kip's 2026-04-30 videos (3.1x the fine detail of Kip's AutoStakkert stack at a better
     detail-to-noise ratio, no ringing) and reworked on the 2026-10-23 dusk video after Kip found it blown out: levels
-    set, white balance on the highlands, an edge-preserving brightness denoise, Richardson-Lucy (15 iterations,
+    set, white balance on the highlands, an edge-preserving brightness denoise, Richardson-Lucy (30 iterations,
     Gaussian PSF), three-scale detail gains, the limb protected, natural mineral colour and a mid-tone brightness curve."""
     import cv2
     import numpy as np
@@ -915,7 +916,7 @@ def _sharpen(img, linear: bool, up: int):
     den = cv2.bilateralFilter(lum, 0, 0.015, 1.5 * up)  # 0.03 smeared highland texture (2026-10-28)
     sigma = 1.2 * up
     est = den.copy()
-    for _ in range(15):
+    for _ in range(RL_ITERS):
         conv = cv2.GaussianBlur(est, (0, 0), sigma)
         est = est * cv2.GaussianBlur(den / np.maximum(conv, 1e-4), (0, 0), sigma)
     b1, b2, b3 = (cv2.GaussianBlur(est, (0, 0), s_ * up) for s_ in (1.0, 2.0, 4.0))
@@ -989,7 +990,7 @@ def _sharpen(img, linear: bool, up: int):
     rgb = getattr(_align_channels, "last", [])
     return out, ((f"colour channels lined up (atmospheric dispersion: {', '.join(rgb)}); " if rgb else "")
                  + "sky removed (it ends black); "
-                 + f"white balance on the highlands, edge-preserving denoise, Richardson-Lucy (15 iterations, PSF σ {sigma:.1f}) "
+                 + f"white balance on the highlands, edge-preserving denoise, Richardson-Lucy ({RL_ITERS} iterations, PSF σ {sigma:.1f}) "
                  "and three-scale detail gains (fine +80%, medium +50%, coarse +20%) on the brightness (from green); "
                  f"natural mineral colour kept faint ({MOON_SAT:g}x) (twilight and brightness-linked colour removed, highlands "
                  f"neutral, none where the video clipped); brightness curve to a disc median of {MOON_MEDIAN:g} with a soft "

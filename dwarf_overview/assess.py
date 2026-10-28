@@ -46,7 +46,7 @@ high-frequency content and detail-to-noise. Trust these over generic advice:
 - The app's MOON STACK already does this, and it gave about 3x the fine detail of the owner's AutoStakkert stack of the \
 same video at a better detail-to-noise ratio (36 against 21): best 5% of frames (5% beat 10% and 20%; at least 50), \
 reference averaged from the 8 sharpest, global rotation + shift then 128 px patches, sharper frames weighted higher, \
-then highland white balance, a gentle edge-preserving denoise, Richardson-Lucy 15 iterations with a Gaussian PSF \
+then highland white balance, a gentle edge-preserving denoise, Richardson-Lucy 30 iterations (15 before the denoise was lightened) with a Gaussian PSF \
 sigma 1.2 px, three-scale detail gains (fine +80%, medium +50%, coarse +20%), the limb protected, a soft highlight shoulder.
 - Tone and colour (2026-10-23, the owner found a disc median of 0.60 with 0.7% near white "blown out and poor"): \
 white point at the disc's 99.97th percentile, gamma to a disc median of about 0.48, soft shoulder from 0.82. Natural \

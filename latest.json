@@ -1,6 +1,6 @@
 {
-  "version": "0.17.6",
-  "notes": "Moon: near-grey natural colour like DWARF's own Moon shots, deeper maria and brighter rays, crisper highland texture, black floor removed so the sky and the dark limb edge are truly black.",
-  "sha256": "0f14fff5441b7a6ff9c6d1702c885f6fa0127cc9131532a47b54462bc0db839e",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.6.zip"
+  "version": "0.17.7",
+  "notes": "Moon: sharper crater detail (Richardson-Lucy 30 iterations) with no rims or halos.",
+  "sha256": "3e8dbe7f91b6e59de3c9c3ada8a92db8987950a6caf34d7e4a3b38b2f7becfdf",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.7.zip"
 }
