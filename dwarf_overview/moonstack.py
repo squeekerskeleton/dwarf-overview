@@ -522,7 +522,7 @@ def _screen(j, sources: list, ranked: dict, each_frame, target: tuple, trial: in
         img = _tone_match(img, f_g, f_mask)
         n = stacked(si)
         trial_s = _detail_noise(((acc + img * n) / (wsum + n)).astype("float32"))
-        if trial_s > ADD_MIN * cur:  # a tie doesn't join
+        if trial_s > ADD_MIN * 1.01 * cur:  # a real gain only: 0.17.14 let a raw session in on 10.1 against 10.1
             used.append(si)
             notes.append(f"{sources[si]['name']} added (detail/noise {cur:.1f} to {trial_s:.1f})")
             acc, wsum, cur = acc + img * n, wsum + n, trial_s
@@ -531,7 +531,7 @@ def _screen(j, sources: list, ranked: dict, each_frame, target: tuple, trial: in
     for si in cand:
         if si not in stacks:  # couldn't be tested: it might cost resolution, so it stays out
             notes.append(f"{sources[si]['name']} left out (its frames couldn't be tested)")
-    return sorted(used), "; ".join(notes)
+    return used, "; ".join(notes)  # the leader (best detail/noise on its own) first
 
 
 # ---------------------------------------------------------------- the job
@@ -761,6 +761,14 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
         sources[si]["s"] = 1.0 if abs(sc_ - 1) < 0.03 else sc_
     target = tuple(sources[ref_si]["shape"])
     used, why = _screen(j, sources, ranked, each_frame, target)
+    # The reference is the screening leader, and every source is sized to its Moon. 0.17.14 took the frame with the
+    # highest raw score, a raw frame (scores from different resolutions don't compare), and all 290 frames of the
+    # best video then failed to line up with it.
+    lead = used[0]
+    for si in used:
+        sc_ = r_nat[lead] / max(1.0, r_nat[si])
+        sources[si]["s"] = 1.0 if abs(sc_ - 1) < 0.03 else sc_
+    target = tuple(sources[lead]["shape"])
     sized = [f"{sources[si]['name']} x{sources[si]['s']:.2f}" for si in used if sources[si]["s"] != 1.0]
     if sized:
         why = (why + "; " if why else "") + "Moon size matched to the reference: " + ", ".join(sized)
@@ -774,7 +782,7 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
 
     # 3. align and stack, all on the sharpest frame from the best source
     j.step(2, "running")
-    ref_f = max(best, key=lambda f: (f[1] == ref_si, f[0]))
+    ref_f = max((f for f in best if f[1] == lead), key=lambda f: f[0])
     # The reference is the mean of the sharpest few frames of that source, lined up on the sharpest: a single
     # frame's noise pulled the patch alignment around.
     top = sorted((f for f in best if f[1] == ref_f[1]), key=lambda f: -f[0])[:REF_N]
@@ -840,6 +848,9 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
             j.log(f"Aligned and stacked {done} of {len(best)}")
     if done < 5:
         raise MoonError("Fewer than 5 frames lined up with the reference; nothing to stack.")
+    if per[lead][0] < 0.5 * sum(per[lead]):
+        raise MoonError(f"Most of {sources[lead]['name']}'s own frames didn't line up with its reference "
+                        f"({per[lead][1]} of {sum(per[lead])}); the stack would be worse than it should be.")
     stack = (acc / max(1e-6, wsum)).astype("float32")
     mix = " and ".join(x for x in (f"{by_kind['video']} video frames" if by_kind["video"] else "",
                                    f"{by_kind['fits']} raw frames" if by_kind["fits"] else "") if x)

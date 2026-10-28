@@ -1,6 +1,6 @@
 {
-  "version": "0.17.14",
-  "notes": "Moon: punchier, crisper finish (stronger maria/highland contrast, crisper crater rims and rays); fairer test of whether a smaller video or session adds detail.",
-  "sha256": "83dde82edfbf86246ceba587b9956f5c6d6634efdc5f5771a1a43bc70799dd2b",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.14.zip"
+  "version": "0.17.15",
+  "notes": "MOON STACK: fixes 0.17.14 building on a raw frame instead of the best video; a source must add clearly more detail to join.",
+  "sha256": "b227680e2faeb1e933d3069151a2946008dd29264aade715f2db7a0418b23adc",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.15.zip"
 }
