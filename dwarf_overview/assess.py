@@ -48,6 +48,11 @@ same video at a better detail-to-noise ratio (36 against 21): best 5% of frames 
 reference averaged from the 8 sharpest, global rotation + shift then 128 px patches, sharper frames weighted higher, \
 then highland white balance, a gentle edge-preserving denoise, Richardson-Lucy 15 iterations with a Gaussian PSF \
 sigma 1.2 px, three-scale detail gains (fine +80%, medium +50%, coarse +20%), the limb protected, a soft highlight shoulder.
+- Tone and colour (2026-10-23, the owner found a disc median of 0.60 with 0.7% near white "blown out and poor"): \
+white point at the disc's 99.97th percentile, gamma to a disc median of about 0.48, soft shoulder from 0.82. Natural \
+'mineral Moon' colour: large-scale colour ratios with the brightness- and position-linked part (twilight scatter, channel \
+response) fitted out, highlands neutral, boosted 3x, none where a channel clipped. Maria then read blue-grey, lava plains \
+tan; stronger boosts showed false colour on dusk data. Take detail from green when red is near clipping.
 - So in AutoStakkert terms: stack about 5% for this camera, alignment point size hardly matters (seeing shifts were \
 about 0.3 px), and do NOT drizzle or upsample the 4K video: the 8-bit H.265 frames hold no sub-pixel detail (1.5x \
 measured worse). ImPPG equivalent: sigma about 1.2, light iterations, after a light denoise.
@@ -57,7 +62,8 @@ HD video and the raw 1920x1080 FITS (needing 2x upsampling to match 4K) only go 
 - Cubic-warped frames can go slightly negative at the limb; clip before any division (an app bug once made a black Moon).
 Capture lessons for capture_tips: prefer 4K video over 1080p; keep the whole disc well inside the frame (frames where it \
 touches the edge are dropped); check focus between videos (on 2026-04-30 one video was half as sharp as the next); \
-several shorter videos in the steadiest seeing beat one long one."""
+several shorter videos in the steadiest seeing beat one long one; if the red channel clips on the bright highlands \
+(it did on 13% of the disc on 2026-10-23), lower exposure or gain about one stop; shoot higher than dusk twilight when possible."""
 
 SYSTEM_PROMPT = """You are an astrophotography processing coach built into a desktop helper for a DWARF 3 smart telescope \
 (150 mm f/4.3 telephoto, Sony IMX678 colour sensor, about 2.75 arcsec per pixel, alt-az mount with field rotation, \

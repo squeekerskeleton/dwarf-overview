@@ -1,6 +1,6 @@
 {
-  "version": "0.17.2",
-  "notes": "Moon stack: chooses videos and photo sessions by detail-to-noise (a noisier source no longer counts as sharper), sharpens brightness only with the colour carried over smoothly (no cyan or pink edges after a dusk sky), lines up the colour channels, and tones the Moon's colour down to near-grey.",
-  "sha256": "0f56a61e19ebf07909dcc483a704d9094bfb54da397e037457d369ffb67970f2",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.2.zip"
+  "version": "0.17.3",
+  "notes": "Moon finish reworked: no more blown-out highlights (disc median 0.48, soft shoulder), detail from green where red clipped, natural mineral colour (blue-grey maria, tan lava plains) with twilight false colour removed.",
+  "sha256": "4f2c629fd79f73a6c58de1da298de13cdaaa47283f070c5eb0d419b6fb7d1306",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.3.zip"
 }
