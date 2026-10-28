@@ -37,7 +37,7 @@ from . import dwarf, finishing, scope, tools
 
 OUT_W, OUT_H = 3840, 2160
 KEEP = 0.05            # share of each source's frames kept (5% beat 10% and 20% on Kip's 2026-04-30 videos)
-MOON_SAT = 3.0         # mineral-colour boost (2026-10-23: maria blue-grey, lava plains tan, highlands neutral)
+MOON_SAT = 1.8         # mineral-colour boost (3x read as false colour to Kip on 2026-10-28; DWARF's own Moon images are near grey)
 MOON_MEDIAN = 0.48     # disc median after the brightness curve (0.60 looked blown out to Kip)
 MAX_KEEP, MIN_KEEP = 1000, 50
 REF_N = 8              # the alignment reference is the mean of this many of the sharpest frames
@@ -948,8 +948,9 @@ def _sharpen(img, linear: bool, up: int):
         ch = ch / np.maximum(ch.mean(axis=2, keepdims=True), 1e-4)
         hl = dm & (lum > np.percentile(lum[dm], 60))
         ch = ch / np.maximum(np.array([ch[..., c][hl].mean() for c in range(3)]), 1e-4)
-        e9 = 9 * up
-        inner = cv2.GaussianBlur(cv2.erode(disc, np.ones((e9, e9), np.uint8)).astype("float32"), (0, 0), 4.0 * up)
+        # Colour fades out over the outer 40 px: Kip marked teal and pink tints along the limb as false colour.
+        e40 = 40 * up
+        inner = cv2.GaussianBlur(cv2.erode(disc, np.ones((e40, e40), np.uint8)).astype("float32"), (0, 0), 12.0 * up)
         ch = 1 + MOON_SAT * (ch - 1) * ((1 - np.clip(3 * near_clip, 0, 1)) * inner)[..., None]
     else:
         ch = np.ones_like(x)
@@ -963,6 +964,18 @@ def _sharpen(img, linear: bool, up: int):
     L2 = L1 ** gm
     L2 = np.where(L2 > 0.82, 0.82 + 0.18 * np.tanh((L2 - 0.82) / 0.18), L2)
     out = np.clip(out * (L2 / L)[..., None], 0, 1).astype("float32")
+    # True black sky (Kip, 2026-10-28: the sky held 1-2/255 of noise beside the Moon, "not a true black"): everything
+    # outside the Moon's outline (lit part and any dark side, as one convex shape) set to 0, with a 2 px soft edge.
+    seen = (cv2.cvtColor(out, cv2.COLOR_RGB2GRAY) > 0.03).astype("uint8")
+    n_, lab, st, _ = cv2.connectedComponentsWithStats(seen, 8)
+    if n_ > 1:
+        big = 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA]))
+        pts = cv2.findNonZero((lab == big).astype("uint8"))
+        shape = np.zeros_like(seen)
+        cv2.fillConvexPoly(shape, cv2.convexHull(pts), 1)
+        g3 = 3 * up
+        shape = cv2.dilate(shape, np.ones((g3, g3), np.uint8)).astype("float32")
+        out = out * cv2.GaussianBlur(shape, (0, 0), 1.0 * up)[..., None]
     rgb = getattr(_align_channels, "last", [])
     return out, ((f"colour channels lined up (atmospheric dispersion: {', '.join(rgb)}); " if rgb else "")
                  + "sky removed (it ends black); "
@@ -970,7 +983,7 @@ def _sharpen(img, linear: bool, up: int):
                  "and three-scale detail gains (fine +80%, medium +50%, coarse +20%) on the brightness (from green); "
                  f"natural mineral colour boosted {MOON_SAT:g}x (twilight and brightness-linked colour removed, highlands "
                  f"neutral, none where the video clipped); brightness curve to a disc median of {MOON_MEDIAN:g} with a soft "
-                 "highlight shoulder; the limb and sky are protected from halos.")
+                 "highlight shoulder; the limb and sky are protected from halos and the sky is set to true black.")
 
 
 def _centre(img):

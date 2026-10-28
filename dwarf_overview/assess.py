@@ -51,8 +51,9 @@ sigma 1.2 px, three-scale detail gains (fine +80%, medium +50%, coarse +20%), th
 - Tone and colour (2026-10-23, the owner found a disc median of 0.60 with 0.7% near white "blown out and poor"): \
 white point at the disc's 99.97th percentile, gamma to a disc median of about 0.48, soft shoulder from 0.82. Natural \
 'mineral Moon' colour: large-scale colour ratios with the brightness- and position-linked part (twilight scatter, channel \
-response) fitted out, highlands neutral, boosted 3x, none where a channel clipped. Maria then read blue-grey, lava plains \
-tan; stronger boosts showed false colour on dusk data. Take detail from green when red is near clipping.
+response) fitted out, highlands neutral, boosted 1.8x and faded over the outer 40 px of the limb (3x read as false colour to the owner), \
+none where a channel clipped. The owner wants a TRUE black sky (0, not 1-2/255 of noise) and a near-grey Moon like \
+DWARFLAB's own sample images. Take detail from green when red is near clipping.
 - So in AutoStakkert terms: stack about 5% for this camera, alignment point size hardly matters (seeing shifts were \
 about 0.3 px), and do NOT drizzle or upsample the 4K video: the 8-bit H.265 frames hold no sub-pixel detail (1.5x \
 measured worse). ImPPG equivalent: sigma about 1.2, light iterations, after a light denoise.
