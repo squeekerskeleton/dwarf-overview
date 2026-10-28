@@ -246,8 +246,9 @@ def _video_path(item: dict, work: Path, j) -> Path:
     return dest
 
 
-def _video_frames(path: Path):
-    """(index, float RGB 0..1) for every frame."""
+def _video_frames(path: Path, width: int | None = None):
+    """(index, float RGB 0..1) for every frame; with width, shrunk to it first (scoring: 4K float frames made
+    scoring 14,600 frames take an hour on 2026-10-23)."""
     import cv2
     cap = cv2.VideoCapture(str(path))
     try:
@@ -256,6 +257,8 @@ def _video_frames(path: Path):
             ok, fr = cap.read()
             if not ok:
                 break
+            if width and fr.shape[1] > width:
+                fr = cv2.resize(fr, (width, max(1, round(fr.shape[0] * width / fr.shape[1]))), interpolation=cv2.INTER_AREA)
             yield k, cv2.cvtColor(fr, cv2.COLOR_BGR2RGB).astype("float32") / 255.0
             k += 1
     finally:
@@ -659,12 +662,12 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
 
     bayer: dict = {}
 
-    def each_frame(only=None):
+    def each_frame(only=None, width=None):
         for si, s in enumerate(sources):
             if only is not None and si not in only:
                 continue
             if s["kind"] == "video":
-                for k, img in _video_frames(_video_path(s, work, j)):
+                for k, img in _video_frames(_video_path(s, work, j), width):
                     yield si, k, img
             else:
                 from astropy.io import fits as pf
@@ -678,7 +681,7 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
     j.step(1, "running")
     frames = []  # (score, source, frame key, brightness)
     n = 0
-    for si, k, img in each_frame():
+    for si, k, img in each_frame(width=960):  # _score works at 960 px wide anyway
         j.wait_if_paused()
         if j.stopped():
             raise MoonError("Stopped.")

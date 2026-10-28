@@ -1,6 +1,6 @@
 {
-  "version": "0.17.3",
-  "notes": "Moon finish reworked: no more blown-out highlights (disc median 0.48, soft shoulder), detail from green where red clipped, natural mineral colour (blue-grey maria, tan lava plains) with twilight false colour removed.",
-  "sha256": "4f2c629fd79f73a6c58de1da298de13cdaaa47283f070c5eb0d419b6fb7d1306",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.3.zip"
+  "version": "0.17.4",
+  "notes": "MOON STACK scores frames about 5x faster (video frames shrunk before scoring).",
+  "sha256": "4f0ec3e3b9ab32cbd68ee2c4f4bb8e9cb9597ba4e5d0efa7f929efb42c6749c8",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.4.zip"
 }
