@@ -1,6 +1,6 @@
 {
-  "version": "0.17.9",
-  "notes": "Moon: denoise strength calibrated on the green channel (the measured noise is shown in the step note); MOON STACK accepts a keep share for tuning runs.",
-  "sha256": "d9c0e0ab2a34d2c262d40bddee50ee463f3ebc8912696a762a16fb219b724e99",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.9.zip"
+  "version": "0.17.10",
+  "notes": "MOON STACK: a video or session joins only if it adds detail (none that costs resolution), the log says which were added and how many frames each gave, and raw frames are tone-matched before the alignment check.",
+  "sha256": "df60a2c0545dfc784a3f1d0133fef6da01d280b0883ee2dfca120525adb76632",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.10.zip"
 }

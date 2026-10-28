@@ -42,7 +42,7 @@ MOON_MEDIAN = 0.42     # disc median after the brightness curve (0.60 looked blo
 RL_ITERS = 30          # Richardson-Lucy iterations (2026-10-23 after the lighter denoise: 15/20/25/30 gave detail/noise 10.5/11.1/11.5/11.8; 40 rimmed crater walls)
 MAX_KEEP, MIN_KEEP = 1000, 50
 REF_N = 8              # the alignment reference is the mean of this many of the sharpest frames
-ADD_MIN = 0.98         # a further source joins only if the combined stack keeps this share of the sharpness
+ADD_MIN = 1.0          # a further source joins only if the combined stack loses no detail/noise (Kip: "if it degrades resolution, do not stack together"; 0.98 let a raw session in on 2026-10-23)
 SOFT = 0.8             # a source whose median frame is below this share of the best same-size source's is left out
 CLUSTER_MIN = 45       # minutes either side of the night's main cluster
 STEPS = ["Find the night's Moon shots", "Score every frame's sharpness", "Align and stack the best frames",
@@ -498,12 +498,13 @@ def _screen(j, sources: list, ranked: dict, each_frame, trial: int = 20) -> tupl
         trial_s = _detail_noise(((acc + img * n) / (wsum + n)).astype("float32"))
         if trial_s >= ADD_MIN * cur:
             used.append(si)
+            notes.append(f"{sources[si]['name']} added (detail/noise {cur:.1f} to {trial_s:.1f})")
             acc, wsum, cur = acc + img * n, wsum + n, trial_s
         else:
             notes.append(f"{sources[si]['name']} left out (it would lower the detail: detail/noise {trial_s:.1f} against {cur:.1f})")
     for si in cand:
-        if si not in stacks:
-            used.append(si)  # couldn't be tested: keep the old behaviour
+        if si not in stacks:  # couldn't be tested: it might cost resolution, so it stays out
+            notes.append(f"{sources[si]['name']} left out (its frames couldn't be tested)")
     return sorted(used), "; ".join(notes)
 
 
@@ -737,6 +738,7 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
     r_d = 2 * np.sqrt(rm.sum() / np.pi)
     ref_lo = cv2.GaussianBlur(ref_small, (0, 0), 2)
     rejected = 0
+    per = {si: [0, 0] for si in {f[1] for f in best}}  # stacked, left out
     wanted = {(f[1], f[2]) for f in best}
     score_of = {(f[1], f[2]): f[0] for f in best}
     acc = np.zeros_like(ref, dtype="float64")
@@ -758,14 +760,15 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
                                      borderMode=cv2.BORDER_REPLICATE), 0, None)
         # A frame that didn't line up (its disc off the reference's, or its surface unlike it) is dropped: on
         # 2026-10-23 a few left a ghost Moon in the sky.
+        if si != ref_f[1]:  # frames of the reference's own source share its exposure and gamma
+            img = _tone_match(img, ref_g, disc_mask)  # before the check: linear raw frames looked unlike the video
         a_small = _gray_small(img)[0]
         am = _disc(a_small)[0]
         if am.sum() < 50 or np.hypot(*(np.array([v.mean() for v in np.nonzero(am)]) - (ry, rx))) > max(2.0, 0.01 * r_d) \
                 or _ncc(ref_lo, cv2.GaussianBlur(a_small, (0, 0), 2), rm) < 0.9:
             rejected += 1
+            per[si][1] += 1
             continue
-        if si != ref_f[1]:  # frames of the reference's own source share its exposure and gamma
-            img = _tone_match(img, ref_g, disc_mask)
         lm = _local_map(ref_g, img.mean(axis=2).astype("float32"), ref_mask)
         if lm is not None:
             img = np.clip(cv2.remap(img, lm[0], lm[1], cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE), 0, None)
@@ -773,6 +776,7 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
         acc += img * wgt
         wsum += wgt
         done += 1
+        per[si][0] += 1
         by_kind[src["kind"]] += 1
         j.part(2, done / len(best))
         if done % 25 == 0:
@@ -785,7 +789,9 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
     j.step(2, "done", f"Stacked {done} frames ({mix}), sharper frames weighted higher: rotation and shift per frame onto "
                       f"a reference averaged from the {len(top)} sharpest, tones matched, then 128 px surface patches "
                       "aligned one by one"
-                      + (f"; {rejected} frames that didn't line up were left out." if rejected else "."))
+                      + (f"; {rejected} frames that didn't line up were left out" if rejected else "")
+                      + (" (" + "; ".join(f"{sources[si]['name']}: {a} stacked, {b} left out" for si, (a, b) in sorted(per.items()))
+                         + ")." if len(per) > 1 or rejected else "."))
 
     # 4. sharpen
     j.step(3, "running")
