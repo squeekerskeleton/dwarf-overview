@@ -1,6 +1,6 @@
 {
-  "version": "0.17.11",
-  "notes": "MOON STACK: HD videos and raw sessions are now matched to the 4K video by the Moon's measured size (they were wrongly enlarged 2x, so none of their frames could be used).",
-  "sha256": "8336ec38523329681d33d01fa07d50379838959249d82bef95cbfe99a55cc4b3",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.11.zip"
+  "version": "0.17.12",
+  "notes": "MOON STACK: fixes 0.17.11 leaving the sharpest 4K video out; the softness test compares only shots of the same resolution again.",
+  "sha256": "c9be213a1965403e1ec33ab384d2a40f945758a52538e939be7f3cf6c06dea19",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.12.zip"
 }

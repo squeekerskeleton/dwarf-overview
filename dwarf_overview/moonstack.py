@@ -477,7 +477,9 @@ def _screen(j, sources: list, ranked: dict, each_frame, target: tuple, trial: in
     left, notes = [], []
     med = {si: float(np.median([f[0] for f in fr])) for si, fr in ranked.items()}
     for si in list(ranked):
-        same = [o for o in ranked if abs(sources[o]["s"] / sources[si]["s"] - 1) < 0.2]
+        # Only frames scored at the same shrink compare (0.17.11 grouped 4K with 1080p, and the 1080p raw session's
+        # 2x-shrunk scores beat both 4K videos' 4x-shrunk ones, leaving the best video out); mixing is the trial's job.
+        same = [o for o in ranked if sources[o]["shape"][1] == sources[si]["shape"][1]]
         top = max(med[o] for o in same)
         if med[si] < SOFT * top:
             left.append(si)
