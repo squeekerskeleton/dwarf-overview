@@ -10,6 +10,55 @@ from . import config, history
 SIRIL_COMMANDS = ["autostretch", "subsky", "rmgreen", "platesolve", "spcc", "pcc", "denoise", "starnet",
                   "asinh", "ght", "satu", "crop", "rl", "unsharp", "savetif", "save"]
 
+# What tuning on this owner's own DWARF 3 data measured (2026-10-27/28). Kept in the prompts so Claude's advice agrees with
+# what Auto-apply and MOON STACK do, and with what was found to work; update it as new rounds teach something.
+DEEP_FINDINGS = """
+
+Measured on this owner's DWARF 3 data (C 33 Eastern Veil, Duo-band, 218 min of 15 s subs), in many measured rounds \
+against the DWARF's own processed picture of the same data. Trust these over generic advice:
+- The app's Auto-apply already does: Siril restack (keep about 88 to 95% x roundness), GraXpert background extraction \
+(smoothing 0.4 for nebulae: 0.2 left a dark moat around C 33), plate solve + SPCC, GraXpert AI deconvolution \
+(object 0.5, stellar up to 0.3 at the measured FWHM), GraXpert denoise (0.7 under 1 h, 0.6 under 3 h, 0.5 above) plus colour \
+noise smoothing. Recommend changes to these only when the measurements show a reason.
+- For Duo-band emission nebulae with StarNet installed, the finish that won is layered: StarNet removes the stars \
+right after a colour-keeping arcsinh stretch; background flattening, the nebula lift, sky smoothing and saturation are \
+done on the starless layer; the stars are screened back tightened. On C 33 this reached nebula-to-sky-noise contrast \
+74 (natural) and 79 (HOO), against 58 for the DWARF's own picture and 32 for a single-image finish.
+- Targets that looked best: sky background about 8.5 to 9% (11 to 12% looked washed grey), nebula about 0.22 above the sky \
+for strong H-alpha, sky noise about 0.003. H-alpha should be brick red: green about 0.5 of red on H-alpha areas (0.8 \
+turned it orange-yellow, 0.9 yellow); OIII teal-blue. For HOO, OIII scaled to about 0.75 of H-alpha's strength is \
+balanced (1.1 went cyan).
+- The edges of long alt-az sessions (field-rotation wedges) are noisier and glow: they need their own flattening and \
+smoothing; a subject mask must not count glow touching the frame border as nebula.
+- Stars: reduce lightly (about 18%) in rich Milky Way fields; 30 to 42% left the Cygnus field looking empty. Keep star \
+colour (white, blue, orange) but remove a shared tint.
+- Measure sky and noise on the darker half of the image, never a whole-image median: a big nebula counts as sky \
+otherwise. Over-smoothing the sky (grain below about 0.05 of its level) looks plastic.
+- Pictures saved before app 0.14.0 were upside down compared with the DWARF's own (FITS rows run bottom-up).
+Capture lessons for capture_tips: the Duo-band filter only for emission and planetary nebulae (it starves reflection \
+nebulae like M 45, galaxies and clusters, which shine by starlight: use Astro); when stars are elongated across the \
+whole frame, check wind and that the DWARF is level before blaming tracking."""
+
+MOON_FINDINGS = """
+
+Measured on this owner's DWARF 3 Moon videos (4K H.265, 2026-04-30 and later), scored by fine-detail sharpness, \
+high-frequency content and detail-to-noise. Trust these over generic advice:
+- The app's MOON STACK already does this, and it gave about 3x the fine detail of the owner's AutoStakkert stack of the \
+same video at a better detail-to-noise ratio (36 against 21): best 5% of frames (5% beat 10% and 20%; at least 50), \
+reference averaged from the 8 sharpest, global rotation + shift then 128 px patches, sharper frames weighted higher, \
+then highland white balance, a gentle edge-preserving denoise, Richardson-Lucy 15 iterations with a Gaussian PSF \
+sigma 1.2 px, three-scale detail gains (fine +80%, medium +50%, coarse +20%), the limb protected, a soft highlight shoulder.
+- So in AutoStakkert terms: stack about 5% for this camera, alignment point size hardly matters (seeing shifts were \
+about 0.3 px), and do NOT drizzle or upsample the 4K video: the 8-bit H.265 frames hold no sub-pixel detail (1.5x \
+measured worse). ImPPG equivalent: sigma about 1.2, light iterations, after a light denoise.
+- Never stack a softer video or photo session in with a sharper one: on 2026-04-30 adding a video whose median frame \
+was 0.58x as sharp cut the stack's sharpness from 0.102 to 0.075. MOON STACK now leaves such sources out on its own; \
+HD video and the raw 1920x1080 FITS (needing 2x upsampling to match 4K) only go in when they don't cost resolution.
+- Cubic-warped frames can go slightly negative at the limb; clip before any division (an app bug once made a black Moon).
+Capture lessons for capture_tips: prefer 4K video over 1080p; keep the whole disc well inside the frame (frames where it \
+touches the edge are dropped); check focus between videos (on 2026-04-30 one video was half as sharp as the next); \
+several shorter videos in the steadiest seeing beat one long one."""
+
 SYSTEM_PROMPT = """You are an astrophotography processing coach built into a desktop helper for a DWARF 3 smart telescope \
 (150 mm f/4.3 telephoto, Sony IMX678 colour sensor, about 2.75 arcsec per pixel, alt-az mount with field rotation, \
 built-in filters VIS / Astro (UV-IR cut) / Duo-band (H-alpha + OIII)). The owner processes with free tools: \
@@ -36,8 +85,8 @@ Standard order for linear data: crop stacking edges -> GraXpert background extra
 saturation -> recombine stars -> final polish. Skip steps the measurements show are unnecessary and say why. \
 For an already-stretched JPG/PNG, recommend light corrections only and suggest using the FITS next time.
 
-Settings ranges you may recommend: GraXpert smoothing 0.0 to 1.0 (0.1 typical, higher for large nebulae that fill the \
-frame), correction Subtraction or Division, denoise strength 0.0 to 1.0 (0.3 to 0.6 typical). Give exact values, the \
+Settings ranges you may recommend: GraXpert smoothing 0.0 to 1.0 (0.4 for nebulae and 0.5 to 0.6 for galaxies and \
+clusters on this owner's data, see the findings below), correction Subtraction or Division, denoise strength 0.0 to 1.0 (0.3 to 0.6 typical). Give exact values, the \
 menu path in the app, and one line of why. Use the owner's history: when they rated a past setting poorly or noted \
 what they changed, adjust toward what worked for them, and say you did.
 
@@ -57,7 +106,7 @@ H-beta 486 nm, OIII 496/501 nm and SII 672 nm lines; for galaxies and clusters s
 H II regions; for reflection nebulae scattered blue starlight. Mark each line as seen in this image or not \
 (H-alpha shows as red, OIII as teal; with the Duo-band filter red is essentially H-alpha and green+blue OIII). \
 Describe the star colour mix (blue hot stars to red cool stars) in plain terms. Note that colours are uncalibrated \
-until SPCC/PCC is run."""
+until SPCC/PCC is run.""" + DEEP_FINDINGS
 
 MOON_PROMPT = """You are a lunar imaging coach built into a desktop helper for a DWARF 3 smart telescope \
 (150 mm f/4.3 telephoto, Sony IMX678 colour sensor, 2 um pixels, about 2.75 arcsec per pixel, so the full Moon is \
@@ -95,7 +144,7 @@ ranges and rilles that are clearly visible, especially along the terminator, wit
 spectral_overview: moonlight is reflected sunlight (a solar spectrum with Fraunhofer absorption lines), so there are no \
 emission lines; list lines as an empty array. In summary, explain the subtle colour differences of lunar soils \
 (blue titanium-rich basalts like Mare Tranquillitatis, orange-brown titanium-poor basalts like Mare Serenitatis) and \
-whether this image's colour data could show them in a 'mineral Moon' saturation boost. star_colours: 'none in frame'."""
+whether this image's colour data could show them in a 'mineral Moon' saturation boost. star_colours: 'none in frame'.""" + MOON_FINDINGS
 
 _STR = {"type": "string"}
 _NUM = {"type": "number"}
@@ -196,6 +245,7 @@ def _user_content(analysis: dict, session_note: str) -> list:
         "\n\nPlate solve / catalogue identification:\n" + (json.dumps(analysis["field"]) if analysis.get("field") else "not available") +
         "\n\nDWARF shotsInfo.json:\n" + (json.dumps(analysis.get("shot_info")) if analysis.get("shot_info") else "not found") +
         "\n\nPrevious sessions:\n" + history.context_for(analysis.get("shot_info") or {}, analysis.get("mode", "deepsky")) +
+        "\n\n" + history.runs_context(analysis.get("mode", "deepsky")) +
         "\n\nOwner's note for this session: " + (session_note or "none") +
         "\n\n" + (analysis.get("preview_note") or "Image 1 is the whole frame, image 2 is a 100% crop"
                    + (" (both display-stretched; the data itself is linear)." if analysis.get("display_stretched") else "."))
@@ -283,7 +333,10 @@ COMPARE_PROMPT = """You compare astrophotos of the same target for the owner of 
 the owner's current image. The others are reference images they chose (their own earlier best shots, or photos \
 they saved from other DWARF users). Judge only what is visible: detail, noise, star shape, colour balance, \
 background, framing and processing. Rank all images (rank 1 = best), score each 1 to 10 on the same scale, and be \
-encouraging but honest. Keep in mind references may have far more integration time; say so when that explains the gap."""
+encouraging but honest. Keep in mind references may have far more integration time; say so when that explains the gap. \
+A reference may be the DWARF's own processed picture of the same data: on this owner's C 33 that picture had a darker \
+sky (8.6%) and more vivid H-alpha than the app's 0.13 finish but a less even, warm-cast background; the app's layered \
+finish (0.15 on) beat it on contrast, flatness and neutral sky. Name which of these the images show."""
 
 
 def compare(current_b64: str, refs: list[tuple[str, str]], target: str) -> dict:

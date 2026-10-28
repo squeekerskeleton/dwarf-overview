@@ -1,6 +1,6 @@
 {
-  "version": "0.16.2",
-  "notes": "Moon stack: the brightest craters and rays keep their detail (a soft highlight shoulder instead of clipping).",
-  "sha256": "6e55fb7bfbb457376df21870d7738da3fe9d9a874da3669544c634c25f9e3bb7",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.16.2.zip"
+  "version": "0.17.0",
+  "notes": "The app learns from every run: Auto-apply and MOON STACK results are measured, compared with your best earlier run of the same kind, and can be rated 1-5; the built-in assistant now knows what was measured on your own C 33 and Moon data, plus tonight's capture lessons.",
+  "sha256": "940b7e1af0317a5562cd2de0984247d79523a5feadcf97dd4a5d24a963925b45",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.0.zip"
 }

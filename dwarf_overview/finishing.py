@@ -1116,3 +1116,23 @@ def layered_finish(rgb, starless, p: dict | None = None, edge=None) -> tuple:
     final = shadow_toe(edge_band(np.clip(final - fs + fs.mean(), 0, 1).astype("float32")))
     sl = shadow_toe(np.clip(sl - _sky(sl.mean(axis=2)[::4, ::4]) + p["sky_target"], 0, 1))
     return final.astype("float32"), sl.astype("float32"), stars.astype("float32"), notes
+
+
+def run_metrics(img) -> dict:
+    """What a finished deep-sky image measures, for the run log: sky level and noise, nebula brightness above the
+    sky (stars removed), contrast (that over the noise), background unevenness (spread of the darker-half medians
+    of 16x9 tiles, in noise levels) and colour blotchiness. The same measures the C 33 rounds were judged by."""
+    import cv2
+    np = _np()
+    lum = (img @ np.array(IMX678_LUMA, dtype="float32")).astype("float32")
+    sky = _sky(lum[::2, ::2])
+    stars = star_mask(img)
+    clean = lum * (1 - stars) + sky * stars
+    noise = _noise(clean)
+    neb = nebula_level(img, stars)
+    h, w = lum.shape
+    th, tw = h // 9, w // 16
+    tiles = [_sky(cv2.GaussianBlur(clean, (0, 0), 2)[r * th:(r + 1) * th, c * tw:(c + 1) * tw]) for r in range(9) for c in range(16)]
+    flat = float(np.std(tiles)) / max(1e-6, noise)
+    return {"contrast": round(neb / max(1e-6, noise), 2), "nebula": round(neb, 4), "sky": round(sky, 4),
+            "sky_noise": round(noise, 5), "flatness": round(flat, 3), "blotch": round(sky_blotches(img), 5)}

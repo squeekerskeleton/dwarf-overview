@@ -696,8 +696,42 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
     (work / "moon_stack.json").write_text(json.dumps({"date": date, "source": source, "frames_used": done,
                                                       "shots": [s["name"] for s in sources]}, indent=1), encoding="utf-8")
     j.outputs["final"] = saved["tif"]
-    j.step(4, "done", f"Saved {OUT_W}×{OUT_H}: {saved['tif']} (also PNG, JPG and FITS).")
-    return {"final": saved["tif"], "folder": str(work), "frames": done, "files": saved, "mode": "moon"}
+    out = {"final": saved["tif"], "folder": str(work), "frames": done, "files": saved, "mode": "moon"}
+    extra = ""
+    try:  # measure and log the run, so the next Moon can say whether it beat the best so far
+        from . import __version__, history
+        metrics = _moon_metrics(canvas)
+        out["run_id"] = history.add_run("moon", f"Moon {date}", "moon", str(work), __version__, metrics)
+        extra = "; " + history.compare_note("moon", "moon", metrics, out["run_id"])
+    except Exception as e:
+        j.log(f"Couldn't log the run ({e}).")
+    j.step(4, "done", f"Saved {OUT_W}×{OUT_H}: {saved['tif']} (also PNG, JPG and FITS){extra}.")
+    return out
+
+
+def _moon_metrics(img) -> dict:
+    """Fine-detail sharpness on the disc at a common 650 px diameter (so 4K and HD results compare), noise on the
+    flattest part of the disc, and clipping: what the 2026-04-30 rounds were judged by."""
+    import cv2
+    import numpy as np
+    g = img.mean(axis=2).astype("float32")
+    mask = g > np.percentile(g, 99.5) * 0.25
+    ys, xs = np.nonzero(mask)
+    if ys.size < 1000:
+        return {}
+    d = max(ys.max() - ys.min(), xs.max() - xs.min())
+    s = 650 / max(1, d)
+    small = cv2.resize(g, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+    smask = cv2.resize(mask.astype("uint8"), small.shape[::-1], interpolation=cv2.INTER_NEAREST).astype(bool)
+    hp = small - cv2.GaussianBlur(small, (0, 0), 1.5)
+    inner = cv2.erode(smask.astype("uint8"), np.ones((25, 25), np.uint8)).astype(bool)
+    local = cv2.GaussianBlur(np.abs(hp), (0, 0), 8)
+    flat = inner & (local <= np.percentile(local[inner], 10)) if inner.any() else inner
+    noise = 1.4826 * float(np.median(np.abs(hp[flat] - np.median(hp[flat])))) if flat.sum() > 100 else 0.0
+    sharp = _sharpness(small, smask)
+    return {"sharpness": round(sharp, 4), "noise": round(noise, 5),
+            "detail_noise": round(sharp / max(1e-6, noise) / 100, 2),
+            "clipped_pct": round(float((g[mask] >= 0.999).mean() * 100), 3)}
 
 
 def _sharpen(img, linear: bool, up: int):

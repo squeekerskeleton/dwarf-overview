@@ -1191,10 +1191,29 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
                          "so the natural-colour version is the main result; the Astro filter suits it better next time")
     out.update(final=saved["tif"], files=saved)
     notes.append("saved TIFF (16-bit), PNG, JPG and FITS")
+    try:  # measure the result and log the run, so the next one of this kind can say whether it's better
+        from . import __version__, history
+        main = hoo if rec["duo"] and _hoo_main(rec) else img
+        metrics = finishing.run_metrics(main)
+        m = re.search(r"TELE_(.+?)_EXP", found["session"], re.I)
+        ttype = _target_type(rec)
+        out["run_id"] = history.add_run("deepsky", m.group(1) if m else found["session"], ttype, str(work),
+                                        __version__, metrics)
+        notes.append(history.compare_note("deepsky", ttype, metrics, out["run_id"]))
+    except Exception as e:  # the log mustn't sink a finished run
+        j.log(f"Couldn't log the run ({e}).")
     msg = "; ".join(notes)
     j.outputs["final"] = saved["tif"]
     j.step(8, "done", msg[:1].upper() + msg[1:] + ".")
     return out
+
+
+def _target_type(rec: dict) -> str:
+    kind = rec.get("kind") or ""
+    for t in ("planetary", "emission", "reflection", "galaxy", "cluster"):
+        if t in kind:
+            return t + (" (Duo-Band)" if rec.get("duo") else "")
+    return ("nebula" if "nebula" in kind else "other") + (" (Duo-Band)" if rec.get("duo") else "")
 
 
 def _hoo_main(rec: dict) -> bool:

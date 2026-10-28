@@ -821,6 +821,16 @@ async function watchAuto(job_id, px = "auto") {
       const m = document.createElement("button"); m.textContent = "Measure the result";
       m.onclick = () => { ["lastDlg", "moonDlg"].forEach((d) => $(d).open && $(d).close()); document.querySelector('.tab[data-tab="work"]').click(); analyze(o.final, o.mode || "deepsky"); };
       box.appendChild(m);
+      if (o.run_id) {  // the owner's rating teaches the app which results were best
+        const r = document.createElement("div"); r.className = "row"; r.style.marginTop = "6px";
+        r.innerHTML = `<span>How good is it? Rate it so the app learns what you like:</span> <span class="stars">${[1, 2, 3, 4, 5].map((n) => `<button data-r="${n}">${n}</button>`).join("")}</span> <span class="caption"></span>`;
+        r.querySelectorAll("button").forEach((b) => b.onclick = async () => {
+          r.querySelectorAll("button").forEach((x) => x.classList.toggle("on", +x.dataset.r <= +b.dataset.r));
+          try { await api("/api/run_rating", { run_id: o.run_id, rating: +b.dataset.r }); r.lastElementChild.innerHTML = `<span class="ok">Saved ${b.dataset.r}/5.</span>`; }
+          catch (e) { r.lastElementChild.innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+        });
+        box.appendChild(r);
+      }
       if (o.cleanup_bytes) {
         const c = document.createElement("button"); c.textContent = `Delete Siril's working files (${gb(o.cleanup_bytes)})`; c.style.marginLeft = "6px";
         c.onclick = async () => { if (!confirm("Delete Siril's working copies? The raw frames and the results are kept.")) return;

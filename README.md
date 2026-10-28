@@ -202,6 +202,8 @@ With **Calibrate & learn** on, every capture started from the app is logged with
 
 With **Auto-apply recommended settings** on, clicking **Go to** also fills in the camera settings for that target.
 
+**Every Auto-apply and MOON STACK run is measured and logged** (deep sky: nebula-to-sky-noise contrast, sky level and noise, background unevenness, colour blotchiness; Moon: fine-detail sharpness at a common disc size, noise, clipping). The last step's note says whether the run beat your best earlier run of the same kind of target, and the result has a 1–5 rating row: your rating outranks the measurements when the app picks the "best earlier run", and it goes into what the assistant sees next time. The assistant's instructions also carry what was measured on your own data (the C 33 and Moon tuning rounds, and the capture lessons), so its advice matches what Auto-apply and MOON STACK do.
+
 ## Projects
 
 The **Projects** tab keeps finished photos together. Each project is a real folder, by default in `Pictures\DWARF Projects`, and you can change that in Settings. Click **Add to project** on the Assess tab to copy a photo in. Each photo gets an overview built from the file and the DWARF's `shotsInfo.json`:

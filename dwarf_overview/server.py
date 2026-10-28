@@ -287,6 +287,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"error": "Pick at least one image to compare with."}, 400)
                 target = a["target"] or a["assessment"].get("identification", {}).get("primary_target", "")
                 return self._json(assess.compare(current, refs[:3], target))
+            if path == "/api/run_rating":
+                rating = body.get("rating")
+                history.rate_run(int(body["run_id"]), int(rating) if rating else None, body.get("notes", ""))
+                return self._json({"ok": True})
             if path == "/api/feedback":
                 rating = body.get("rating")
                 history.add_feedback(int(body["assessment_id"]), int(rating) if rating else None,

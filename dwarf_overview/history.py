@@ -28,6 +28,18 @@ CREATE TABLE IF NOT EXISTS assessments (
     assessment_json TEXT NOT NULL,
     model TEXT
 );
+CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    target TEXT,
+    target_type TEXT,
+    folder TEXT,
+    version TEXT,
+    metrics_json TEXT NOT NULL,
+    rating INTEGER,
+    notes TEXT
+);
 CREATE TABLE IF NOT EXISTS feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     assessment_id INTEGER NOT NULL REFERENCES assessments(id),
@@ -191,4 +203,75 @@ def context_for(shot_info: dict, mode: str = "deepsky", limit: int = 12) -> str:
     if rated:
         avg = sum(r["rating"] for r in rated) / len(rated)
         lines.append(f"Average user rating so far: {avg:.1f}/5 over {len(rated)} rated sessions.")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- Auto-apply and MOON STACK runs
+# Every finished run is measured and logged, so the next run of the same kind of target can say whether it beat the
+# best so far, and the advice can see which runs the owner liked. The owner's rating outranks the measurements.
+
+KEY = {"deepsky": ("contrast", "nebula-to-sky-noise contrast"), "moon": ("sharpness", "fine-detail sharpness")}
+LABELS = {"contrast": "contrast", "sky_noise": "sky noise", "sky": "sky level", "flatness": "background unevenness",
+          "sharpness": "sharpness", "noise": "noise", "clipped_pct": "clipped %"}
+LOWER_BETTER = {"sky_noise", "flatness", "noise", "clipped_pct"}
+
+
+def add_run(mode: str, target: str, target_type: str, folder: str, version: str, metrics: dict) -> int:
+    with _conn() as c:
+        cur = c.execute("INSERT INTO runs (created, mode, target, target_type, folder, version, metrics_json) VALUES (?,?,?,?,?,?,?)",
+                        (_now(), mode, target, target_type, folder, version, json.dumps(metrics)))
+        return int(cur.lastrowid)
+
+
+def rate_run(run_id: int, rating: int | None, notes: str = "") -> None:
+    with _conn() as c:
+        c.execute("UPDATE runs SET rating = ?, notes = ? WHERE id = ?", (rating, notes, run_id))
+
+
+def runs(mode: str | None = None, limit: int = 200) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute("SELECT * FROM runs" + (" WHERE mode = ?" if mode else "") + " ORDER BY id DESC LIMIT ?",
+                         ((mode, limit) if mode else (limit,))).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["metrics"] = json.loads(d.pop("metrics_json"))
+        out.append(d)
+    return out
+
+
+def best_run(mode: str, target_type: str, exclude_id: int | None = None) -> dict | None:
+    """The best earlier run of this kind of target: the owner's highest rating first, then the key measurement."""
+    key = KEY.get(mode, ("contrast",))[0]
+    rows = [r for r in runs(mode) if r["id"] != exclude_id and (r["target_type"] or "") == (target_type or "")
+            and r["metrics"].get(key) is not None]
+    if not rows:
+        return None
+    return max(rows, key=lambda r: (r["rating"] or 0, r["metrics"][key]))
+
+
+def compare_note(mode: str, target_type: str, metrics: dict, run_id: int) -> str:
+    """One line on how this run measures up against the best earlier run of the same kind of target."""
+    best = best_run(mode, target_type, exclude_id=run_id)
+    key, key_label = KEY.get(mode, ("contrast", "contrast"))
+    if best is None or metrics.get(key) is None:
+        return f"first measured {target_type or mode} run, so it's the one to beat"
+    a, b = metrics[key], best["metrics"][key]
+    verdict = "better than" if a > b * 1.02 else "about the same as" if a >= b * 0.98 else "below"
+    rest = [f"{LABELS[k]} {metrics[k]:.4g} against {best['metrics'][k]:.4g}" for k in LABELS
+            if k != key and metrics.get(k) is not None and best["metrics"].get(k) is not None][:3]
+    who = f"{best['target'] or '?'}, {best['created'][:10]}" + (f", you rated it {best['rating']}/5" if best["rating"] else "")
+    return (f"{key_label} {a:.4g}, {verdict} the best earlier {target_type or mode} run ({who}: {b:.4g})"
+            + (f"; {', '.join(rest)}" if rest else ""))
+
+
+def runs_context(mode: str, limit: int = 8) -> str:
+    rows = runs(mode, limit)
+    if not rows:
+        return "No Auto-apply or MOON STACK runs logged yet."
+    lines = [f"Recent {'MOON STACK' if mode == 'moon' else 'Auto-apply'} runs (measured by the app; the rating is the owner's):"]
+    for r in rows:
+        m = ", ".join(f"{k}={v:.4g}" for k, v in r["metrics"].items() if isinstance(v, (int, float)))
+        lines.append(f"- {r['created'][:10]} {r['target'] or '?'} ({r['target_type'] or '?'}, app {r['version']}): {m}"
+                     + (f" | OWNER RATING {r['rating']}/5" if r["rating"] else "") + (f" notes=\"{r['notes']}\"" if r["notes"] else ""))
     return "\n".join(lines)
