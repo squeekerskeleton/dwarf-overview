@@ -414,7 +414,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/moon/stack":
                 date = str(body.get("date") or "") or moonstack.date_of(str(body["path"]))
                 return self._json({"job_id": moonstack.start(date, str(body.get("source") or "all"), body.get("path"),
-                                                             [str(x) for x in body.get("exclude") or []]), "date": date})
+                                                             [str(x) for x in body.get("exclude") or []],
+                                                             keep=float(body["keep"]) if body.get("keep") else None), "date": date})
             if path == "/api/autoprocess/resume":
                 return self._json({"job_id": autoprocess.resume(str(body["folder"]))})
             if path == "/api/autoprocess/cleanup":

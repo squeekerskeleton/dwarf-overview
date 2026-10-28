@@ -1,6 +1,6 @@
 {
-  "version": "0.17.8",
-  "notes": "Moon: the denoise strength now follows each stack's measured noise (cleaner on noisier videos, crisper on clean ones).",
-  "sha256": "8fe106186f2333b0844b462a8b53b3ee59171889b905ed87ea58f3bee9c26059",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.8.zip"
+  "version": "0.17.9",
+  "notes": "Moon: denoise strength calibrated on the green channel (the measured noise is shown in the step note); MOON STACK accepts a keep share for tuning runs.",
+  "sha256": "d9c0e0ab2a34d2c262d40bddee50ee463f3ebc8912696a762a16fb219b724e99",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.9.zip"
 }

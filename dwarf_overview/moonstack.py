@@ -551,9 +551,11 @@ def _picked(path: str) -> dict | None:
     return None
 
 
-def start(date: str, source: str = "all", include: str | None = None, exclude: list[str] | None = None) -> str:
+def start(date: str, source: str = "all", include: str | None = None, exclude: list[str] | None = None,
+          keep: float | None = None) -> str:
     """Stack a night. include: a file the person opened (always used, even from outside the library and the
-    DWARF); exclude: names of videos or sessions they unticked."""
+    DWARF); exclude: names of videos or sessions they unticked; keep: share of each source's frames to keep
+    (default KEEP), for tuning runs."""
     from .autoprocess import _Job, work_root
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date or ""):
         raise MoonError("Pick a date.")
@@ -573,6 +575,7 @@ def start(date: str, source: str = "all", include: str | None = None, exclude: l
     work.mkdir(parents=True, exist_ok=True)
     j = _Job(STEPS)
     j.weights = list(WEIGHTS)
+    j.keep = float(min(0.5, max(0.01, keep))) if keep else KEEP
     threading.Thread(target=_run, args=(j, items, source, work, date), daemon=True).start()
     return j.id
 
@@ -700,9 +703,9 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
     best = []
     for si in used:
         mine = ranked[si]
-        best += mine[:min(len(mine), max(MIN_KEEP, round(len(mine) * KEEP)))]
+        best += mine[:min(len(mine), max(MIN_KEEP, round(len(mine) * getattr(j, "keep", KEEP))))]
     best = sorted(best, key=lambda f: -f[0] * sources[f[1]]["weight"])[:MAX_KEEP]
-    j.step(1, "done", f"Scored {n} frames; keeping the sharpest {len(best)}, about 5% of each video and session"
+    j.step(1, "done", f"Scored {n} frames; keeping the sharpest {len(best)}, about {getattr(j, 'keep', KEEP):.0%} of each video and session"
                       + (f"; {why}" if why else "") + ".")
 
     # 3. align and stack, all on the sharpest frame from the best source
@@ -913,17 +916,18 @@ def _sharpen(img, linear: bool, up: int):
     gray = cv2.cvtColor(np.clip(x, 0, None), cv2.COLOR_RGB2GRAY)
     kg = float(gray[dmk].mean() / max(1e-6, x[..., 1][dmk].mean()))
     lum = (x[..., 1] * kg).astype("float32")
-    # The denoise follows the stack's measured noise (on the calmest 10% of the disc): 0.015 suited the 2026-10-23
-    # video and 0.0225 the noisier 04-30 one; both fit about 15x the noise. 0.03 on 10-23 smeared highland texture.
+    # The denoise follows the stack's measured noise (on the calmest 10% of the disc, from green): 0.015-0.02 suited
+    # the 2026-10-23 video and 0.0225 the noisier 04-30 one, about 13x the noise. 0.03 on 10-23 smeared texture.
     res = lum - cv2.GaussianBlur(lum, (0, 0), 1.0 * up)
     e25 = 25 * up
     dmn = dmk & (cv2.erode(disc, np.ones((e25, e25), np.uint8)) > 0)
-    sc = 0.015
+    sc, mad = 0.02, 0.0
     if dmn.sum() > 1000:
         flat = cv2.GaussianBlur(np.abs(lum - cv2.GaussianBlur(lum, (0, 0), 4.0 * up)), (0, 0), 8.0 * up)
         sel = dmn & (flat < np.percentile(flat[dmn], 10))
         r = res[sel]
-        sc = float(np.clip(15 * 1.4826 * np.median(np.abs(r - np.median(r))), 0.01, 0.04))
+        mad = float(1.4826 * np.median(np.abs(r - np.median(r))))
+        sc = float(np.clip(13 * mad, 0.01, 0.04))
     den = cv2.bilateralFilter(lum, 0, sc, 1.5 * up)
     sigma = 1.2 * up
     est = den.copy()
@@ -1000,7 +1004,7 @@ def _sharpen(img, linear: bool, up: int):
     rgb = getattr(_align_channels, "last", [])
     return out, ((f"colour channels lined up (atmospheric dispersion: {', '.join(rgb)}); " if rgb else "")
                  + "sky removed (it ends black); "
-                 + f"white balance on the highlands, edge-preserving denoise (strength {sc:.3f}, set from the measured noise), Richardson-Lucy ({RL_ITERS} iterations, PSF σ {sigma:.1f}) "
+                 + f"white balance on the highlands, edge-preserving denoise (strength {sc:.3f}, from measured noise {mad:.4f}), Richardson-Lucy ({RL_ITERS} iterations, PSF σ {sigma:.1f}) "
                  "and three-scale detail gains (fine +80%, medium +50%, coarse +20%) on the brightness (from green); "
                  f"natural mineral colour kept faint ({MOON_SAT:g}x) (twilight and brightness-linked colour removed, highlands "
                  f"neutral, none where the video clipped); brightness curve to a disc median of {MOON_MEDIAN:g} with a soft "

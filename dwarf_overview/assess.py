@@ -53,7 +53,7 @@ white point at the disc's 99.97th percentile, gamma to a disc median of about 0.
 'mineral Moon' colour: large-scale colour ratios with the brightness- and position-linked part (twilight scatter, channel \
 response) fitted out, highlands neutral, kept faint (0.8x; 3x and 1.5x read as teal/pink false colour to the owner) and faded over \
 the outer 40 px of the limb; disc median 0.42 with a gentle local contrast lift; a denoise set from the measured noise \
-(bilateral sigmaColor about 15x the noise MAD: 0.015 on 2026-10-23, 0.0225 on the noisier 2026-04-30), \
+(bilateral sigmaColor about 13x the green-channel noise MAD: 0.015 on 2026-10-23, 0.0225 on the noisier 2026-04-30), \
 none where a channel clipped. The owner wants a TRUE black sky (0, not 1-2/255 of noise) and a near-grey Moon like \
 DWARFLAB's own sample images. Take detail from green when red is near clipping.
 - So in AutoStakkert terms: stack about 5% for this camera, alignment point size hardly matters (seeing shifts were \
