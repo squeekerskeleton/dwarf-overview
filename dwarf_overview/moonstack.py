@@ -603,11 +603,30 @@ def start(date: str, source: str = "all", include: str | None = None, exclude: l
     return j.id
 
 
+def _set_aside(folder: Path, keep: int = 3) -> None:
+    """Move an earlier run's result_moon_4k files into earlier/<time>/ instead of letting the new run write over
+    them (2026-10-28: tuning runs replaced Kip's best Moon). The last `keep` earlier results are kept."""
+    old = sorted(folder.glob("result_moon_4k.*")) if folder.is_dir() else []
+    if not old:
+        return
+    stamp = datetime.fromtimestamp(max(f.stat().st_mtime for f in old)).strftime("%Y-%m-%d_%H%M%S")
+    dest = folder / "earlier" / stamp
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in old:
+        f.replace(dest / f.name)
+    sets = sorted(d for d in (folder / "earlier").iterdir() if d.is_dir())
+    for d in sets[:-keep]:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def _run(j, items, source, work, date) -> None:
     try:
         out = _pipeline(j, items, source, work, date)
         if not j.stopped():
-            from .autoprocess import archive
+            from .autoprocess import archive, finished_root
+            root = finished_root()
+            if root:
+                _set_aside(root / work.name)
             out = archive(j, work, out)
             j.job.update(state="done", output=out)
     except Exception as e:
@@ -836,6 +855,7 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
     j.step(4, "running")
     canvas = _centre(sharp)
     stem = work / "result_moon_4k"
+    _set_aside(work)
     saved = finishing.save_final(canvas, stem)
     (work / "moon_stack.json").write_text(json.dumps({"date": date, "source": source, "frames_used": done,
                                                       "shots": [s["name"] for s in sources]}, indent=1), encoding="utf-8")

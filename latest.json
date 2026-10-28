@@ -1,6 +1,6 @@
 {
-  "version": "0.17.12",
-  "notes": "MOON STACK: fixes 0.17.11 leaving the sharpest 4K video out; the softness test compares only shots of the same resolution again.",
-  "sha256": "c9be213a1965403e1ec33ab384d2a40f945758a52538e939be7f3cf6c06dea19",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.12.zip"
+  "version": "0.17.13",
+  "notes": "MOON STACK: re-running a night keeps the earlier result (moved into an 'earlier' folder, last three kept) instead of overwriting it.",
+  "sha256": "e46f40f37f5113c72b4559d621f23c549a3ea14a0b261b3aeb15898531477915",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.13.zip"
 }
