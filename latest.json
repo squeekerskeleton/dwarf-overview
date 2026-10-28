@@ -1,6 +1,6 @@
 {
-  "version": "0.17.0",
-  "notes": "The app learns from every run: Auto-apply and MOON STACK results are measured, compared with your best earlier run of the same kind, and can be rated 1-5; the built-in assistant now knows what was measured on your own C 33 and Moon data, plus tonight's capture lessons.",
-  "sha256": "940b7e1af0317a5562cd2de0984247d79523a5feadcf97dd4a5d24a963925b45",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.0.zip"
+  "version": "0.17.1",
+  "notes": "Moon stack: works with a bright dusk or hazy sky (the sky is measured and removed, so it ends black and doesn't tint the Moon), drops frames that didn't line up (no ghost Moon), and copies shots off the DWARF before stacking so unplugging it mid-run can't break the run.",
+  "sha256": "84553d7eccc685d4984443c4260227237c9e8f773d018ce75505970a91726f99",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.1.zip"
 }

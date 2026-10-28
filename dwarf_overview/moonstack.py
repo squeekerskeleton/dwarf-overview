@@ -190,7 +190,19 @@ def _debayer(raw, code_cache: dict):
 
 
 def _fits_frames(item: dict, work: Path, j) -> list[Path]:
-    """The session's frames as local files (Wi-Fi sessions are copied into the work folder first)."""
+    """The session's frames as local files. Sessions on the DWARF (USB-C or Wi-Fi) are copied into the work folder
+    first, so unplugging it mid-run (2026-10-28) can't cut a later pass short."""
+    if item["source"] == "DWARF (USB-C)":
+        dest = work / "frames" / item["name"]
+        src = sorted(f for f in Path(item["where"]).iterdir() if f.suffix.lower() in (".fits", ".fit")
+                     and not f.name.lower().startswith(("failed", "stacked")))
+        dest.mkdir(parents=True, exist_ok=True)
+        for f in src:
+            if not (dest / f.name).exists() or (dest / f.name).stat().st_size != f.stat().st_size:
+                j.wait_if_paused()
+                shutil.copy2(f, dest / (f.name + ".part"))
+                (dest / (f.name + ".part")).replace(dest / f.name)
+        return sorted(dest / f.name for f in src)
     if item["source"] != "DWARF (Wi-Fi)":
         return sorted(f for f in Path(item["where"]).iterdir() if f.suffix.lower() in (".fits", ".fit")
                       and not f.name.lower().startswith(("failed", "stacked")))
@@ -211,6 +223,14 @@ def _fits_frames(item: dict, work: Path, j) -> list[Path]:
 
 
 def _video_path(item: dict, work: Path, j) -> Path:
+    if item["source"] == "DWARF (USB-C)":  # copied once, then every pass reads the local copy
+        src, dest = Path(item["where"]), work / "frames" / item["name"]
+        if not dest.exists() or dest.stat().st_size != src.stat().st_size:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            j.log(f"Copying {item['name']} from the DWARF…")
+            shutil.copy2(src, str(dest) + ".part")
+            Path(str(dest) + ".part").replace(dest)
+        return dest
     if item["source"] != "DWARF (Wi-Fi)":
         return Path(item["where"])
     dest = work / "frames" / item["name"]
@@ -258,10 +278,29 @@ def _gray_small(img, width: int = 960):
     return cv2.resize(g, (width, max(1, round(g.shape[0] * s))), interpolation=cv2.INTER_AREA), s
 
 
+def _sky_level(g) -> float:
+    """The sky's brightness, from a band along the frame's edge (the Moon is never stacked touching it). Dusk and
+    moonlit-haze skies sit well above black: 2026-10-23's was a quarter of full scale."""
+    import numpy as np
+    h, w = g.shape[:2]
+    b = max(2, min(h, w) // 25)
+    band = np.concatenate([g[:b].ravel(), g[-b:].ravel(), g[:, :b].ravel(), g[:, -b:].ravel()])
+    return float(np.median(band))
+
+
+def _disc_mask(g):
+    """The lit Moon, measured above the sky: a fixed share of the brightest level put the whole frame inside the
+    'disc' when the sky was bright (2026-10-23 at dusk)."""
+    import numpy as np
+    sky = _sky_level(g)
+    return g > sky + 0.35 * (float(np.percentile(g, 99.5)) - sky)
+
+
 def _disc(g):
     """Mask of the lit Moon in a small grey frame, and how bright it is."""
     import numpy as np
     from .lunar import _otsu
+    g = np.clip(g - _sky_level(g), 0, None)
     norm = g / max(1e-6, float(np.percentile(g, 99.9)))
     thr = max(_otsu(np.clip(norm, 0, 1)), 0.08)
     m = norm > thr
@@ -299,6 +338,14 @@ def _global_warp(ref_small, img_small, scale: float):
     warp = warp.copy()
     warp[:, 2] /= scale
     return warp
+
+
+def _ncc(a, b, mask) -> float:
+    """Normalised cross-correlation of two grey images over a mask."""
+    import numpy as np
+    x, y = a[mask].astype("float64"), b[mask].astype("float64")
+    x, y = x - x.mean(), y - y.mean()
+    return float((x * y).sum() / max(1e-12, np.sqrt((x * x).sum() * (y * y).sum())))
 
 
 def _local_map(ref_g, img_g, mask, patch: int = 128, step: int = 64, max_shift: float = 8.0):
@@ -340,7 +387,7 @@ def _sharpness(img, mask=None) -> float:
     import numpy as np
     g = img.mean(axis=2).astype("float32") if img.ndim == 3 else img.astype("float32")
     if mask is None:
-        mask = g > np.percentile(g, 99.5) * 0.25
+        mask = _disc_mask(g)
     inner = cv2.erode(mask.astype("uint8"), np.ones((25, 25), np.uint8)).astype(bool)
     if inner.sum() < 1000:
         return 0.0
@@ -356,6 +403,9 @@ def _read(each_frame, si: int, keys: list) -> dict:
             out[k] = img
             if len(out) == len(want):
                 break
+    if len(out) < len(want):
+        raise MoonError(f"Only {len(out)} of {len(want)} frames could be read back from one of the shots: was the DWARF "
+                        "unplugged or the file moved during the run? Copy the night into the library and start again.")
     return out
 
 
@@ -644,6 +694,11 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
     h, w = ref_g.shape
     ref_mask = cv2.resize(_disc(ref_small)[0].astype("uint8"), (w, h), interpolation=cv2.INTER_NEAREST)
     disc_mask = ref_mask.astype(bool)
+    rm = _disc(ref_small)[0]
+    ry, rx = (float(v.mean()) for v in np.nonzero(rm))
+    r_d = 2 * np.sqrt(rm.sum() / np.pi)
+    ref_lo = cv2.GaussianBlur(ref_small, (0, 0), 2)
+    rejected = 0
     wanted = {(f[1], f[2]) for f in best}
     score_of = {(f[1], f[2]): f[0] for f in best}
     acc = np.zeros_like(ref, dtype="float64")
@@ -663,6 +718,14 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
         warp = _global_warp(ref_small, small, scale)
         img = np.clip(cv2.warpAffine(img, warp, (w, h), flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP,
                                      borderMode=cv2.BORDER_REPLICATE), 0, None)
+        # A frame that didn't line up (its disc off the reference's, or its surface unlike it) is dropped: on
+        # 2026-10-23 a few left a ghost Moon in the sky.
+        a_small = _gray_small(img)[0]
+        am = _disc(a_small)[0]
+        if am.sum() < 50 or np.hypot(*(np.array([v.mean() for v in np.nonzero(am)]) - (ry, rx))) > max(2.0, 0.01 * r_d) \
+                or _ncc(ref_lo, cv2.GaussianBlur(a_small, (0, 0), 2), rm) < 0.9:
+            rejected += 1
+            continue
         if si != ref_f[1]:  # frames of the reference's own source share its exposure and gamma
             img = _tone_match(img, ref_g, disc_mask)
         lm = _local_map(ref_g, img.mean(axis=2).astype("float32"), ref_mask)
@@ -676,12 +739,15 @@ def _pipeline(j, items, source, work: Path, date: str) -> dict:
         j.part(2, done / len(best))
         if done % 25 == 0:
             j.log(f"Aligned and stacked {done} of {len(best)}")
+    if done < 5:
+        raise MoonError("Fewer than 5 frames lined up with the reference; nothing to stack.")
     stack = (acc / max(1e-6, wsum)).astype("float32")
     mix = " and ".join(x for x in (f"{by_kind['video']} video frames" if by_kind["video"] else "",
                                    f"{by_kind['fits']} raw frames" if by_kind["fits"] else "") if x)
     j.step(2, "done", f"Stacked {done} frames ({mix}), sharper frames weighted higher: rotation and shift per frame onto "
                       f"a reference averaged from the {len(top)} sharpest, tones matched, then 128 px surface patches "
-                      "aligned one by one.")
+                      "aligned one by one"
+                      + (f"; {rejected} frames that didn't line up were left out." if rejected else "."))
 
     # 4. sharpen
     j.step(3, "running")
@@ -715,7 +781,7 @@ def _moon_metrics(img) -> dict:
     import cv2
     import numpy as np
     g = img.mean(axis=2).astype("float32")
-    mask = g > np.percentile(g, 99.5) * 0.25
+    mask = _disc_mask(g)
     ys, xs = np.nonzero(mask)
     if ys.size < 1000:
         return {}
@@ -734,15 +800,45 @@ def _moon_metrics(img) -> dict:
             "clipped_pct": round(float((g[mask] >= 0.999).mean() * 100), 3)}
 
 
+def _remove_sky(x):
+    """Take a bright or coloured sky (dusk, haze) off each channel: a smooth surface fitted to the sky around the
+    disc, subtracted, so the sky ends black and its colour doesn't tint the Moon (2026-10-23: blue-grey sky at a
+    quarter of full scale, orange Moon)."""
+    import cv2
+    import numpy as np
+    lum = x.mean(axis=2)
+    disc = _disc_mask(lum)
+    h, w = lum.shape
+    grow = max(15, int(0.04 * max(h, w))) | 1
+    sky = ~cv2.dilate(disc.astype("uint8"), np.ones((grow, grow), np.uint8)).astype(bool)
+    step = max(1, min(h, w) // 200)
+    ys, xs = np.mgrid[0:h:step, 0:w:step]
+    sel = sky[::step, ::step]
+    if sel.sum() < 200:
+        return x
+    yy, xx = ys[sel] / h - 0.5, xs[sel] / w - 0.5
+    A = np.stack([np.ones_like(yy), xx, yy, xx * xx, yy * yy, xx * yy], 1)
+    Y, X = np.mgrid[0:h, 0:w]
+    Y, X = Y / h - 0.5, X / w - 0.5
+    out = x.copy()
+    for c in range(3):
+        v = x[..., c][::step, ::step][sel]
+        keep = v <= np.percentile(v, 98)  # stray light and the odd star don't pull the fit
+        coef = np.linalg.lstsq(A[keep], v[keep], rcond=None)[0]
+        model = coef[0] + coef[1] * X + coef[2] * Y + coef[3] * X * X + coef[4] * Y * Y + coef[5] * X * Y
+        out[..., c] = x[..., c] - model.astype("float32")
+    return np.clip(out, 0, None).astype("float32")
+
+
 def _sharpen(img, linear: bool, up: int):
     """The finish tuned on Kip's 2026-04-30 videos (3.1x the fine detail of Kip's AutoStakkert stack at a better
     detail-to-noise ratio, no ringing): levels set, white balance on the highlands, an edge-preserving brightness
     denoise, Richardson-Lucy (15 iterations, Gaussian PSF), three-scale detail gains, the limb protected."""
     import cv2
     import numpy as np
-    x = np.clip(img, 0, None)
+    x = _remove_sky(np.clip(img, 0, None))
     lum0 = x.mean(axis=2)
-    lit = lum0 > np.percentile(lum0, 99.5) * 0.25
+    lit = _disc_mask(lum0)
     if lit.sum() > 100:  # the Moon is close to grey: balance the channels on the bright highlands (the sensor is green-heavy)
         high = lit & (lum0 > np.percentile(lum0[lit], 60))
         means = np.array([x[..., c][high].mean() for c in range(3)])
@@ -764,7 +860,7 @@ def _sharpen(img, linear: bool, up: int):
     out = b3 + 1.2 * (b2 - b3) + 1.5 * (b1 - b2) + 1.8 * (est - b1)
     # The limb and the dark sky stay as stacked: no ringing or halo outside the disc.
     er = 17 * up
-    disc = (base.mean(axis=2) > np.percentile(base.mean(axis=2), 99.5) * 0.25).astype("uint8")
+    disc = _disc_mask(base.mean(axis=2)).astype("uint8")
     lm = cv2.GaussianBlur(cv2.erode(disc, np.ones((er, er), np.uint8)).astype("float32"), (0, 0), er / 2.2)[..., None]
     out = out * lm + base * (1 - lm)
     # A soft shoulder instead of a hard clip: 0.16.1 clipped 0.77% of the disc (Tycho and the brightest rays).
@@ -784,7 +880,7 @@ def _centre(img):
         img = cv2.resize(img, (round(w * s), round(h * s)), interpolation=cv2.INTER_AREA)
         h, w = img.shape[:2]
     lum = img.mean(axis=2)
-    m = lum > max(1e-4, float(np.percentile(lum, 99.5)) * 0.25)  # the disc, whatever its brightness
+    m = _disc_mask(lum)  # the disc, whatever its brightness and the sky's
     ys, xs = np.nonzero(m)
     cy, cx = (float(ys.mean()), float(xs.mean())) if ys.size else (h / 2, w / 2)
     canvas = np.zeros((OUT_H, OUT_W, 3), "float32")
