@@ -37,8 +37,8 @@ from . import dwarf, finishing, scope, tools
 
 OUT_W, OUT_H = 3840, 2160
 KEEP = 0.05            # share of each source's frames kept (5% beat 10% and 20% on Kip's 2026-04-30 videos)
-MOON_SAT = 0.8         # mineral-colour boost: 3x and 1.5x showed teal/pink false colour to Kip (2026-10-28); DWARF's own Moon images are near grey
-MOON_MEDIAN = 0.40     # disc median after the brightness curve (0.60 looked blown out to Kip; 0.38 showed maria noise)
+MOON_SAT = 1.2         # mineral-colour boost: 3x showed teal/pink false colour to Kip (2026-10-28) and 2.0 brought teal back at the limb; DWARFLAB's own Moon sample shows faint blue-grey maria and warm highlands
+MOON_MEDIAN = 0.33     # disc median after the brightness curve (0.60 looked blown out to Kip; DWARFLAB's own Moon sample is darker and moodier than 0.40)
 RL_ITERS = 30          # Richardson-Lucy iterations (2026-10-23 after the lighter denoise: 15/20/25/30 gave detail/noise 10.5/11.1/11.5/11.8; 40 rimmed crater walls)
 MAX_KEEP, MIN_KEEP = 1000, 50
 REF_N = 8              # the alignment reference is the mean of this many of the sharpest frames
@@ -1045,7 +1045,7 @@ def _sharpen(img, linear: bool, up: int):
     else:
         ch = np.ones_like(x)
     out = np.clip(ch, 0, 3) * sharp_l[..., None]
-    # Brightness curve: white point at the disc's 99.97th percentile, a gamma that puts the disc median at 0.40, a soft
+    # Brightness curve: white point at the disc's 99.97th percentile, a gamma that puts the disc median at 0.33, a soft
     # shoulder from 0.82 and a local contrast lift (deeper maria, brighter rays). 0.17.2 sat at median 0.60
     # with 0.7% of the disc near white: Kip found it blown out.
     L = np.maximum(cv2.cvtColor(np.clip(out, 0, 4).astype("float32"), cv2.COLOR_RGB2GRAY), 1e-5)

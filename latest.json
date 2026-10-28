@@ -1,6 +1,6 @@
 {
-  "version": "0.17.15",
-  "notes": "MOON STACK: fixes 0.17.14 building on a raw frame instead of the best video; a source must add clearly more detail to join.",
-  "sha256": "b227680e2faeb1e933d3069151a2946008dd29264aade715f2db7a0418b23adc",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.15.zip"
+  "version": "0.17.16",
+  "notes": "Moon: darker, moodier tones and a faint natural colour, closer to DWARFLAB's own Moon sample.",
+  "sha256": "1f5b81829ca8798c905c7ceaef9fcddbd87d38f22fd4a240816973a82f8a33f2",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.16.zip"
 }
