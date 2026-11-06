@@ -133,5 +133,14 @@ def prepare(dark_file: Path, light_file: Path, out: Path) -> str:
     if not 0.25 < ratio < 4:
         raise ValueError(f"its levels are {ratio:.1f}x off from the frames'")
     data = np.flipud(dark) if use_flip else dark
-    fits.PrimaryHDU(np.clip(data, 0, 65535).astype("uint16")).writeto(out, overwrite=True)
-    return f"hot pixels line up{' (flipped)' if use_flip else ''}"
+    # On a truly dark sky the frames' background sits at the dark's level (2026-11-04, 60 s gain 90: 187 against
+    # 185), and Siril's integer calibration clips everything below it at 0: half the sky, so frames kept a handful
+    # of stars and wouldn't register. A pedestal taken off the dark (about 4x the frames' noise, never below the
+    # dark's own floor) keeps light minus dark positive; the constant goes with the background later.
+    sigma = 1.4826 * l_mad
+    ped = 0.0
+    if l_med - d_med < 5 * sigma:
+        ped = float(min(4 * sigma, max(0.0, np.percentile(data, 1))))
+    fits.PrimaryHDU(np.clip(np.asarray(data, dtype="float32") - ped, 0, 65535).astype("uint16")).writeto(out, overwrite=True)
+    return (f"hot pixels line up{' (flipped)' if use_flip else ''}"
+            + (f"; a {ped:.0f} ADU pedestal keeps the very dark sky from clipping at zero" if ped else ""))

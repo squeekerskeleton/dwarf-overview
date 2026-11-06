@@ -1,6 +1,6 @@
 {
-  "version": "0.17.16",
-  "notes": "Moon: darker, moodier tones and a faint natural colour, closer to DWARFLAB's own Moon sample.",
-  "sha256": "1f5b81829ca8798c905c7ceaef9fcddbd87d38f22fd4a240816973a82f8a33f2",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.17.16.zip"
+  "version": "0.18.0",
+  "notes": "Mosaic mode for Auto-apply: each panel stacked on its own, background taken out per panel, panels plate solved and joined seamlessly, then framed like the DWARF's own mosaic and finished with the layered star treatment. Very dark skies no longer clip at zero (pedestal dark).",
+  "sha256": "72864a1cb99b6002e2648d08099fdf04a34182b3598bab1ddcef3e61a6d91091",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.18.0.zip"
 }

@@ -160,52 +160,72 @@ def _size(text: str) -> int:
 
 
 def find_frames(preview_path: str, include_failed: bool = False) -> dict:
-    """Every raw frame of the session behind this photo, and where each one can be read from."""
+    """Every raw frame of the session behind this photo, and where each one can be read from. A mosaic's frames
+    are in one subfolder per panel; each frame then carries its panel and is copied to that panel's folder."""
+    from . import mosaic
     preview = Path(preview_path)
     name, local = _session_of(preview)
-    lights = work_root() / _safe(name) / "lights"
-    frames: dict[str, dict] = {}
-
-    def add(fname, source, where, size):
-        if _is_frame(fname, include_failed) and fname not in frames:
-            frames[fname] = {"name": fname, "source": source, "where": where, "size": size}
-
-    held = lights.parent / FAILED_DIR  # rejected frames kept out of the stack by the last screening
+    root = mosaic.session_root(local)
+    if root != local:
+        name, local = root.name, root
+    panels = mosaic.panels(local)
+    work0 = work_root() / _safe(name)
     done = _finished_dir(name)
-    places = [(lights, "processing folder"), (held, "processing folder")]
-    if done:  # an earlier finished run's frames, moved off the processing drive
-        places += [(done / "lights", "finished runs folder"), (done / FAILED_DIR, "finished runs folder")]
-    for folder, source in places + [(local, "laptop library")]:
-        if folder.is_dir():
-            for f in folder.iterdir():
-                if f.is_file():
-                    add(f.name, source, str(f), f.stat().st_size)
+    # (panel tag, subfolder inside the session, where its frames go in the processing folder)
+    groups = [(p["tag"], p["sub"], work0 / p["tag"]) for p in panels] or [("", "", work0)]
+    frames: dict[tuple, dict] = {}
+
+    def add(tag, fname, source, where, size):
+        if _is_frame(fname, include_failed) and (tag, fname) not in frames:
+            frames[(tag, fname)] = {"name": fname, "source": source, "where": where, "size": size, "panel": tag}
+
+    for tag, sub, pw in groups:
+        held = pw / FAILED_DIR  # rejected frames kept out of the stack by the last screening
+        places = [(pw / "lights", "processing folder"), (held, "processing folder")]
+        if done:  # an earlier finished run's frames, moved off the processing drive
+            dp = done / tag if tag else done
+            places += [(dp / "lights", "finished runs folder"), (dp / FAILED_DIR, "finished runs folder")]
+        for folder, source in places + [(local / sub if sub else local, "laptop library")]:
+            if folder.is_dir():
+                for f in folder.iterdir():
+                    if f.is_file():
+                        add(tag, f.name, source, str(f), f.stat().st_size)
     remote = None
     for usb in scope.usb_folders():
         for cand in [Path(usb) / name] + [d / name for d in Path(usb).iterdir() if d.is_dir()]:
             if cand.is_dir():
                 remote = "USB-C"
-                for f in cand.iterdir():
-                    if f.is_file():
-                        add(f.name, "DWARF (USB-C)", str(f), f.stat().st_size)
+                for tag, sub, pw in groups:
+                    folder = cand / sub if sub else cand
+                    for f in (folder.iterdir() if folder.is_dir() else []):
+                        if f.is_file():
+                            add(tag, f.name, "DWARF (USB-C)", str(f), f.stat().st_size)
                 break
     if remote is None:
         for root in dwarf.ROOTS.values():
             try:
-                listing = dwarf.session_files(root, name)
+                if panels:
+                    lists = [(tag, pw, f"{root}{name}/{sub}/", dwarf._listing(f"{root}{name}/{sub}/"))
+                             for tag, sub, pw in groups]
+                else:
+                    lists = [("", work0, f"{root}{name}/", dwarf.session_files(root, name)["files"])]
             except (dwarf.DwarfError, OSError):
                 continue
             remote = "Wi-Fi"
-            for e in listing["files"]:
-                add(e["name"], "DWARF (Wi-Fi)", f"{root}{name}/{e['name']}", _size(e["size"]))
+            for tag, pw, base, listing in lists:
+                for e in listing:
+                    if not e.get("dir"):
+                        add(tag, e["name"], "DWARF (Wi-Fi)", base + e["name"], _size(e["size"]))
             break
-    shown = sorted(frames.values(), key=lambda f: f["name"])
+    shown = sorted(frames.values(), key=lambda f: (f["panel"], f["name"]))
     failed = sum(1 for f in shown if f["name"].lower().startswith("failed"))
     total = sum(f["size"] for f in shown)
     to_copy = sum(f["size"] for f in shown if f["source"] != "processing folder")
     free = shutil.disk_usage(_existing_parent(work_root())).free
-    need = to_copy + total * SPACE_FACTOR
-    work, fallback = work_root() / _safe(name), ""
+    # A mosaic stacks one panel at a time and clears its working copies before the next, but in 32-bit with the
+    # whole dithered field (about 15x a raw frame).
+    need = to_copy + (total * mosaic.SPACE_FACTOR / len(panels) if panels else total * SPACE_FACTOR)
+    work, fallback = work0, ""
     if free <= need and done:  # the fast drive is short: work on the finished-runs drive instead (slower)
         try:
             done_free = shutil.disk_usage(_existing_parent(done)).free
@@ -219,7 +239,10 @@ def find_frames(preview_path: str, include_failed: bool = False) -> dict:
             "has_stack": (work_root() / _safe(name) / "result_stack.fits").exists()
                          or bool(done and (done / "result_stack.fits").exists()),
             "bytes": total, "bytes_to_copy": to_copy, "bytes_needed": int(need), "bytes_free": free,
-            "fits": free > need, "work_folder": str(work), "fallback": fallback}
+            "fits": free > need, "work_folder": str(work), "fallback": fallback,
+            "panels": [{**p, "frames": sum(1 for f in shown if f["panel"] == p["tag"])} for p in panels],
+            "mosaic_ref": mosaic.reference_image(local, preview_path) if panels else None,
+            "local": str(local)}
 
 
 def _existing_parent(p: Path) -> Path:
@@ -467,7 +490,9 @@ def _copy_frames(j: _Job, found: dict, lights: Path) -> int:
         j.wait_if_paused()
         if j.stopped():
             raise ProcessError("Stopped.")
-        target, tmp = lights / f["name"], lights / (f["name"] + ".part")
+        dest = lights.parent / f["panel"] / "lights" if f.get("panel") else lights  # a mosaic: the panel's folder
+        dest.mkdir(parents=True, exist_ok=True)
+        target, tmp = dest / f["name"], dest / (f["name"] + ".part")
         try:
             if f["source"] == "DWARF (Wi-Fi)":
                 with urllib.request.urlopen(base + urllib.parse.quote(f["where"]), timeout=60) as r, open(tmp, "wb") as o:
@@ -539,9 +564,13 @@ def _recommend(plan: dict, a: dict, found: dict, shot: dict) -> dict:
     gx = assess.get("graxpert") or {}
     m = re.search(r"EXP_([\d.]+)", found["session"], re.I)
     exp = float(m.group(1)) if m else 15.0
-    minutes = found["count"] * exp / 60
+    panels = len(found.get("panels") or []) or 1
+    minutes = found["count"] * exp / 60 / panels  # a mosaic: each part of the sky has one panel's worth
     kind = ((assess.get("identification") or {}).get("object_type") or "").lower()
     r = {"minutes": minutes, "duo": _duo_band(shot, found), "kind": kind}
+    if panels > 1:
+        from . import mosaic
+        r.update(mosaic=panels, bge=mosaic.BGE_SMOOTHING, layered=dict(mosaic.LAYERED))
     if "keep_percent" not in plan["_from_plan"]:
         # The roundness cut (best 90%) comes on top of this one, so together they keep about 80% of a big session
         # (0.10 kept 75% x 80% = 58% of M 45's frames).
@@ -603,8 +632,13 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
     t = hwprofile.tuning()
     tune = [f"setcpu {t['siril_threads']}", f"setmem {t['siril_mem_ratio']}"]
     j.log(hwprofile.profile().get("summary", ""))
+    mos = found.get("panels") or []
+    if mos and not v14:
+        raise ProcessError("Mosaics need Siril 1.4 or newer (it plate solves and joins the panels); update Siril "
+                           "from siril.org and run this again.")
     j.log(f"Siril {'.'.join(map(str, _siril_version()))}; {found['count']} frames, {rec['minutes']:.0f} min of "
-          f"integration{', Duo-Band filter (Hα + OIII)' if rec['duo'] else ''}"
+          f"integration{' per panel of a ' + str(len(mos)) + '-panel mosaic' if mos else ''}"
+          f"{', Duo-Band filter (Hα + OIII)' if rec['duo'] else ''}"
           f"{', ' + rec['kind'] if rec['kind'] else ''}.")
     j.step(0, "running", f"{found['count']} frames for {found['session']}" +
            (f" ({found['failed']} the DWARF rejected are included)" if found["failed"] else "") + ".")
@@ -615,17 +649,25 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
         j.step(0, "done", f"Frames not copied: the last stack is reused ({found['count']} frames stay where they are).")
     else:
         copied = _copy_frames(j, found, lights)
-        failed_note = _screen_failed(j, work, lights, j.meta.get("include_failed"))
-        dark_note = _master_dark(j, found, shot, work, lights)
-        ready = sum(1 for f in lights.iterdir() if f.is_file() and FRAME.search(f.name))
-        j.step(0, "done", f"{ready} frames ready to stack in {lights} ({copied} copied). {failed_note} {dark_note}".replace("  ", " "))
+        folders = [work / p["tag"] / "lights" for p in mos] or [lights]
+        failed_note = " ".join(n for n in (_screen_failed(j, d.parent, d, j.meta.get("include_failed")) for d in folders) if n)
+        dark_note = _master_dark(j, found, shot, work, folders[0])
+        counts = [sum(1 for f in d.iterdir() if f.is_file() and FRAME.search(f.name)) if d.is_dir() else 0 for d in folders]
+        where = (f"{' + '.join(map(str, counts))} frames ({len(mos)} panels) ready to stack in {work}" if mos else
+                 f"{counts[0]} frames ready to stack in {lights}")
+        j.step(0, "done", f"{where} ({copied} copied). {failed_note} {dark_note}".replace("  ", " "))
 
     # 2. restack
     stacked = work / "result_stack.fits"
     if not reuse(1, "stacked"):
-        _restack(j, plan, work, proc, tune, (work / "master_dark.fits").exists(), v14, full)
-        j.outputs["stacked"] = str(stacked)
-        j.step(1, "done", f"Stacked: {stacked}")
+        if mos:
+            note = _mosaic_stack(j, found, shot, work, tune, t, (work / "master_dark.fits").exists(), bool(resume))
+            j.outputs["stacked"] = str(stacked)
+            j.step(1, "done", note)
+        else:
+            _restack(j, plan, work, proc, tune, (work / "master_dark.fits").exists(), v14, full)
+            j.outputs["stacked"] = str(stacked)
+            j.step(1, "done", f"Stacked: {stacked}")
 
     # 3. crop
     cropped = work / "result_crop.fits"
@@ -654,7 +696,8 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
                     (j.step(3, "skipped", "GraXpert wasn't found (set it in Settings), so background extraction was skipped.") or c))
     # 5. plate solve + colour
     current = carry(4, "calibrated", current, lambda c: _calibrate(j, plan, shot, c, work, tune, rec, v14))
-    current = _flatten(j, current, work, rec)
+    if not rec.get("mosaic"):  # the mosaic's panels were already flattened one by one, and the layered finish evens the rest
+        current = _flatten(j, current, work, rec)
     # 6. deconvolution
     current = carry(5, "deconvolved", current, lambda c: _deconvolve(j, exe, c, work, tune, t, rec))
     # 7. noise reduction
@@ -755,6 +798,84 @@ def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str], dark:
     raise ProcessError("Siril's restack didn't finish:\n" + tail[-1500:])
 
 
+def _mosaic_stack(j: _Job, found: dict, shot: dict, work: Path, tune: list[str], t: dict, dark: bool,
+                  resume: bool) -> str:
+    """A mosaic: stack each panel on its own, take out each panel's background, join the panels by plate solving,
+    and put the result in the DWARF's own mosaic framing (mosaic.py). Writes result_stack.fits like _restack."""
+    from . import mosaic
+    mos = found["panels"]
+    exe = tools.find_graxpert()
+    joined = work / "mosaic"
+    slots = 6  # progress: each panel's Siril commands, then the joining
+    tail, used, bge = "", [], ""
+    for i, p in enumerate(mos):
+        pw = work / p["tag"]
+        lights = pw / "lights"
+        n = sum(1 for f in lights.iterdir() if f.is_file() and FRAME.search(f.name)) if lights.is_dir() else 0
+        if n < 3:
+            raise ProcessError(f"Panel {i + 1} of the mosaic has only {n} frames.")
+        stack, mark = pw / "stack.fits", pw / "stack.done"
+        if resume and stack.exists() and mark.exists():
+            j.log(f"Panel {i + 1}: reusing its stack from the last session.")
+        else:
+            mark.unlink(missing_ok=True)
+            j.step(1, "running", f"Mosaic panel {i + 1} of {len(mos)} ({n} frames): "
+                                 f"{'dark with a pedestal, ' if dark else ''}CFA equalised, the sharpest "
+                                 f"{mosaic.PANEL_KEEP}% of frames, the whole dithered field kept, 32-bit.")
+            for use_dark in ([True, False] if dark else [False]):
+                shutil.rmtree(pw / "process", ignore_errors=True)
+                lines, phases = mosaic.panel_script(tune, n, use_dark)
+                phases = ["\x00"] * (i * slots) + phases + ["\x00"] * (slots - len(phases)) + \
+                    ["\x00"] * ((len(mos) - 1 - i) * slots + slots)
+                script = pw / "overview_panel.ssf"
+                script.write_text("\n".join(lines), encoding="utf-8")
+                stack.unlink(missing_ok=True)
+                code, tail = j.run(_siril_args(script, pw), pw, step=1, phases=phases)
+                if code == 0 and stack.exists():
+                    break
+                if use_dark and not j.stopped():
+                    j.log(f"Panel {i + 1}: calibrating with the dark didn't work in Siril; stacking it again without.")
+            else:
+                raise ProcessError(f"Siril couldn't stack panel {i + 1} of the mosaic:\n" + tail[-1500:])
+            shutil.rmtree(pw / "process", ignore_errors=True)  # 30 GB or so per panel: free it for the next one
+            m = re.search(r"(?:Integration of|Stacking)\s+(\d+)\s+images", tail, re.I)
+            mark.write_text(m.group(1) if m else "", encoding="utf-8")
+        try:
+            used.append(int(mark.read_text(encoding="utf-8").strip() or 0))
+        except (OSError, ValueError):
+            used.append(0)
+    if j.stopped():
+        raise ProcessError("Stopped.")
+    shutil.rmtree(joined, ignore_errors=True)
+    joined.mkdir(parents=True)
+    j.log("Taking out each panel's background (GraXpert)…" if exe else "GraXpert wasn't found, so each panel keeps its background.")
+    for i, p in enumerate(mos):
+        pw = work / p["tag"]
+
+        def run_gx(inp, stem, pw=pw):
+            return _gx_run(j, exe, inp, pw, t, ["background-extraction", "-correction", "Subtraction",
+                                                "-smoothing", f"{mosaic.BGE_SMOOTHING:.2f}"], stem, None)[0] if exe else None
+        bge = mosaic.bge_panel(pw / "stack.fits", joined / f"panel{i + 1}.fits", pw, run_gx)
+    first = next((f for f in sorted((work / mos[0]["tag"] / "lights").iterdir()) if FRAME.search(f.name)), None)
+    hint = mosaic.centre(shot, first)
+    script = joined / "overview_mosaic.ssf"
+    script.write_text("\n".join(mosaic.assembly_script(tune, hint)), encoding="utf-8")
+    result = work / "result_mosaic.fits"
+    result.unlink(missing_ok=True)
+    j.log(f"Joining the {len(mos)} panels: plate solving each one, then stacking them with their overlaps matched…")
+    code, tail = j.run(_siril_args(script, joined), joined, step=1,
+                       phases=["\x00"] * (len(mos) * slots) + ["convert", "seqplatesolve", "seqapplyreg", "stack", "\x00", "\x00"])
+    if code != 0 or not result.exists():
+        raise ProcessError("Siril couldn't join the mosaic's panels (each panel has to plate solve; Siril 1.4's "
+                           "local star catalogues help):\n" + tail[-1500:])
+    shutil.rmtree(joined, ignore_errors=True)
+    framed = mosaic.frame_to_dwarf(result, work / "result_stack.fits", found.get("mosaic_ref"))
+    counts = " and ".join(str(u) for u in used) if all(used) else ""
+    return (f"{len(mos)}-panel mosaic: each panel stacked on its own"
+            + (f" ({counts} frames)" if counts else "") + f", {bge}, plate solved and joined "
+            "(overlaps matched, 200 px blend), " + framed + ".")
+
+
 def _gx_run(j: _Job, exe: str, current: Path, work: Path, t: dict, cmd: list[str], stem: str, step: int,
             batch: bool = False, timeout: float = 3600) -> tuple[Path | None, str]:
     """Run one GraXpert command on the graphics card when this computer has a suitable one, falling back to
@@ -779,6 +900,8 @@ def _graxpert(j: _Job, gx: dict, exe: str, current: Path, work: Path, t: dict, r
     # Emission nebulae went from 0.2 to 0.4: at 0.2 GraXpert took part of C 33's glow for sky and left a dark moat
     # under the Veil. A plan may ask for more smoothing, not less.
     default = 0.6 if "galaxy" in kind else 0.5 if ("reflection" in kind or "cluster" in kind) else 0.4
+    if (rec or {}).get("bge"):  # a mosaic: a wide field where the nebula reaches the panel edges (the Veil)
+        default = max(default, float(rec["bge"]))
     smooth = max(default, float(gx.get("smoothing"))) if gx.get("smoothing") is not None else default
     out, tail = _gx_run(j, exe, current, work, t, ["background-extraction", "-correction", corr,
                                                    "-smoothing", f"{smooth:.2f}"], "result_bg", 3)
@@ -1028,8 +1151,8 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
     # FITS rows run bottom-up: shown top-down, 0.8-0.13 pictures came out upside down next to the DWARF's own
     # (C 33's arc opened the other way). From here on the image is the right way up; FITS copies are flipped back.
     img = np.flipud(img)
-    if rec["duo"] and _hoo_main(rec) and rec["stars"] > 0 and tools.find_tool("starnet"):
-        done = _layered(j, img, header, work, out, notes)
+    if ((rec["duo"] and _hoo_main(rec)) or rec.get("layered")) and rec["stars"] > 0 and tools.find_tool("starnet"):
+        done = _layered(j, img, header, work, out, notes, rec)
         if done:
             return done
     # Duo-Band nebulae: a dark sky with a bright, saturated nebula. 0.13.2 put C 33's sky at 0.111 with the nebula
@@ -1076,15 +1199,17 @@ def _stretch(j: _Job, a: dict, plan: dict, current: Path, work: Path, tune: list
     return out
 
 
-def _layered(j: _Job, img, header, work: Path, out: Path, notes: list) -> Path | None:
+def _layered(j: _Job, img, header, work: Path, out: Path, notes: list, rec: dict | None = None) -> Path | None:
     """Duo-Band emission nebulae with StarNet: the layered finish (finishing.layered_finish), which beat the DWARF's
-    own C 33 where the single-image path didn't. Returns the stretched image, or None to use the standard path."""
+    own C 33 where the single-image path didn't. Mosaics use it too, with their own star settings and a final pass
+    for row and column banding. Returns the stretched image, or None to use the standard path."""
     import numpy as np
     import tifffile
+    rec = rec or {}
+    p = {**finishing.LAYERED, **(rec.get("layered") or {})}
     try:
         img, wedge, worst, edge = finishing.even_linear(img)
-        rgb = finishing.base_stretch(img, finishing.LAYERED["stretch"], finishing.LAYERED["black_sigma"],
-                                     0.8 * finishing.LAYERED["sky_target"])
+        rgb = finishing.base_stretch(img, p["stretch"], p["black_sigma"], 0.8 * p["sky_target"])
         base = work / "result_basestretch.tif"
         tifffile.imwrite(str(base), (rgb * 65535 + 0.5).astype("uint16"), photometric="rgb")
         if not _starnet(j, base, work / "result_sn.tif"):
@@ -1092,8 +1217,12 @@ def _layered(j: _Job, img, header, work: Path, out: Path, notes: list) -> Path |
         starless = finishing.read_tif(work / "result_sn.tif")
         if starless.shape != rgb.shape:
             raise OSError(f"StarNet's image is {starless.shape[1]}×{starless.shape[0]}, not {rgb.shape[1]}×{rgb.shape[0]}")
-        final, sl, stars, lnotes = finishing.layered_finish(rgb, starless, edge=edge)
-        hoo = finishing.layered_finish(rgb, starless, {"hoo": 1}, edge=edge)[0]
+        final, sl, stars, lnotes = finishing.layered_finish(rgb, starless, p, edge=edge)
+        hoo = finishing.layered_finish(rgb, starless, {**p, "hoo": 1}, edge=edge)[0] if rec.get("duo", True) else None
+        if rec.get("mosaic"):
+            from . import mosaic
+            final, band = mosaic.destripe(final, sl)
+            lnotes.append(f"row and column banding taken out (rms {band * 1000:.2f}/1000)")
     except (OSError, ValueError) as e:
         j.log(f"Layered finish skipped ({e}); using the standard stretch.")
         notes.append("the layered finish couldn't run, so the standard stretch was used")
@@ -1103,10 +1232,10 @@ def _layered(j: _Job, img, header, work: Path, out: Path, notes: list) -> Path |
     finishing.write_fits_rgb(work / "result_stretched.fits", np.flipud(final), header)
     tifffile.imwrite(str(out), (np.clip(final, 0, 1) * 65535 + 0.5).astype("uint16"), photometric="rgb")
     tifffile.imwrite(str(work / "result_starless.tif"), (sl * 65535 + 0.5).astype("uint16"), photometric="rgb")
-    tifffile.imwrite(str(work / "result_hoo_stretched.tif"), (hoo * 65535 + 0.5).astype("uint16"), photometric="rgb")
+    if hoo is not None:
+        tifffile.imwrite(str(work / "result_hoo_stretched.tif"), (hoo * 65535 + 0.5).astype("uint16"), photometric="rgb")
     # The stars on black, to screen over the starless image in an editor; its presence also tells step 8 the stars are done.
     tifffile.imwrite(str(work / "result_stars.tif"), (stars * 65535 + 0.5).astype("uint16"), photometric="rgb")
-    p = finishing.LAYERED
     notes.append(f"layered finish (StarNet separates the stars first, the nebula and sky are finished without them): "
                  + (f"rotation edges evened ({wedge * 100:.0f}% of the frame up to {worst:.1f}× noisier); " if wedge > 0.005 else "")
                  + "colour-keeping arcsinh stretch; " + "; ".join(lnotes)
