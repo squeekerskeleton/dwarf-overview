@@ -745,6 +745,31 @@ def _screen_failed(j: _Job, work: Path, lights: Path, include: bool) -> str:
     return note
 
 
+def _siril_dark_master(j: _Job, n: dict, cache: Path) -> Path | None:
+    """The night's darks stacked by Siril (rej 3 3, no normalisation, 16-bit ADU). On the Veil this master let 2 more
+    frames per panel register than the same darks averaged in numpy (darks.build_session_master, the fallback);
+    the pedestal made no difference."""
+    from . import darks
+    out = cache / f"{n['name']}_siril.fits"
+    if out.exists():
+        return out
+    folder = cache / n["name"]
+    try:
+        for f in n["frames"]:
+            darks.fetch(f, folder)
+        script = folder / "overview_dark.ssf"
+        script.write_text("\n".join(["requires 1.2.0", "setext fits", "set16bits", "convert d -out=../_seq_" + _safe(n["name"]),
+                                      "cd ../_seq_" + _safe(n["name"]), "stack d rej 3 3 -nonorm -out=../" + out.stem, ""]),
+                          encoding="utf-8")
+        out.unlink(missing_ok=True)
+        code, _ = j.run(_siril_args(script, folder), folder, 900)
+        shutil.rmtree(cache / ("_seq_" + _safe(n["name"])), ignore_errors=True)
+        return out if code == 0 and out.exists() else None
+    except Exception as e:
+        j.log(f"Siril couldn't stack the night's darks ({e}); averaging them directly instead.")
+        return None
+
+
 def _master_dark(j: _Job, found: dict, shot: dict, work: Path, lights: Path) -> str:
     from . import darks
     target = work / "master_dark.fits"
@@ -757,7 +782,7 @@ def _master_dark(j: _Job, found: dict, shot: dict, work: Path, lights: Path) -> 
         n = None
     if n:
         try:
-            f = darks.build_session_master(n, work_root() / "_darks")
+            f = _siril_dark_master(j, n, work_root() / "_darks") or darks.build_session_master(n, work_root() / "_darks")
             why = darks.prepare(f, sample, target)
             return (f"Using the {len(n['frames'])} darks the DWARF shot that night ({n['name']}, "
                     f"{n['hours']:.1f} h from the lights; {why}).")
