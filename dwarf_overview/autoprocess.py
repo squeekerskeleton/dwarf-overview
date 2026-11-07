@@ -36,7 +36,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from . import config, dwarf, finishing, history, hwprofile, scope, tools
+from . import config, dwarf, filters, finishing, history, hwprofile, scope, tools
 
 FRAME = re.compile(r"\.(fits?|fts)$", re.I)
 NOT_A_FRAME = re.compile(r"^(stacked|thumbnail|result_|overview_)|_(gx|siril|crop|bg|dn)", re.I)
@@ -569,7 +569,16 @@ def _recommend(plan: dict, a: dict, found: dict, shot: dict) -> dict:
     panels = len(found.get("panels") or []) or 1
     minutes = found["count"] * exp / 60 / panels  # a mosaic: each part of the sky has one panel's worth
     kind = ((assess.get("identification") or {}).get("object_type") or "").lower()
-    r = {"minutes": minutes, "duo": _duo_band(shot, found), "kind": kind}
+    # "duo" means two-line narrowband data (a line in the red pixels, OIII in green and blue): the DWARF's own
+    # Duo-Band, or a dual-band filter held in front of the lens (filters.py), which the files can't show.
+    internal = _duo_band(shot, found)
+    ext = filters.for_session(found["session"])
+    nb = filters.passbands(ext, internal)
+    r = {"minutes": minutes, "duo": bool(nb), "kind": kind, "ext": ext, "nb": nb,
+         "filter_label": nb["short"] if nb else "", "red_line": nb["red"] if nb else "Hα"}
+    if ext and internal:
+        r["filter_warning"] = (f"the {nb['name']} was set for this session, but the DWARF's own Duo-Band was in use "
+                               f"too, which blocks {nb['red']}: only OIII got through (use the Astro filter behind it)")
     if panels > 1:
         from . import mosaic
         r.update(mosaic=panels, bge=mosaic.BGE_SMOOTHING, layered=dict(mosaic.LAYERED))
@@ -630,6 +639,9 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
     except (OSError, ValueError):
         shot = {}
     rec = _recommend(plan, a, found, shot)
+    j.meta["filter"] = rec["ext"] or ("duo" if rec["duo"] else "astro")  # run.json: SHO COMBINE pairs runs by it
+    if rec.get("filter_warning"):
+        j.log("Warning: " + rec["filter_warning"] + ".")
     full = j.meta.get("full_frame", True)
     plan.update({k: v for k, v in rec.items() if k == "keep_percent"})
     v14 = _siril_version() >= (1, 4)
@@ -645,7 +657,7 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
                            "from siril.org and run this again.")
     j.log(f"Siril {'.'.join(map(str, _siril_version()))}; {found['count']} frames, {rec['minutes']:.0f} min of "
           f"integration{' per panel of a ' + str(len(mos)) + '-panel mosaic' if mos else ''}"
-          f"{', Duo-Band filter (Hα + OIII)' if rec['duo'] else ''}"
+          f"{', ' + rec['nb']['name'] + ' filter' if rec['duo'] else ''}"
           f"{', ' + rec['kind'] if rec['kind'] else ''}.")
     j.step(0, "running", f"{found['count']} frames for {found['session']}" +
            (f" ({found['failed']} the DWARF rejected are included)" if found["failed"] else "") + ".")
@@ -1025,16 +1037,18 @@ def _calibrate(j: _Job, plan: dict, shot: dict, current: Path, work: Path, tune:
         j.step(4, "done", "Couldn't plate solve (Siril and ASTAP), so the colour was calibrated from the image's "
                           f"own stars instead: {note}.")
         return work / "result_calibrated.fits"
-    # Colour: SPCC (Siril 1.4; narrowband mode for the Duo-Band filter), then PCC, then from the stars.
-    nb = DUO_BAND
+    # Colour: SPCC (Siril 1.4; narrowband mode for the Duo-Band or an external dual-band filter), then PCC, then
+    # from the stars.
+    nb = rec.get("nb") or DUO_BAND
+    lines = f"{rec.get('red_line', 'Hα')} {nb['rwl']:.0f} nm, OIII {nb['gwl']:.0f} nm"
     tries = []
     if v14:
         sensor = f'"-oscsensor={DWARF3_SENSOR}"'
         if rec["duo"]:
             narrow = (f"spcc -narrowband -rwl={nb['rwl']} -rbw={nb['rbw']} -gwl={nb['gwl']} -gbw={nb['gbw']} "
                       f"-bwl={nb['bwl']} -bbw={nb['bbw']}")
-            tries += [(f"{narrow} {sensor}", "SPCC in narrowband mode (Hα 656 nm, OIII 501 nm)"),
-                      (narrow, "SPCC in narrowband mode (Hα 656 nm, OIII 501 nm)")]
+            tries += [(f"{narrow} {sensor}", f"SPCC in narrowband mode ({lines})"),
+                      (narrow, f"SPCC in narrowband mode ({lines})")]
         else:
             # Without -oscfilter Siril reuses whatever filter was last picked in its SPCC window.
             full = f'spcc {sensor} "-oscfilter={ASTRO_FILTER}" "-whiteref=Average Spiral Galaxy"'
@@ -1380,8 +1394,10 @@ def _finish(j: _Job, stretched: Path, work: Path, proc: Path, found: dict, rec: 
             hoo, _ = finishing.quality_gate(finishing.cap_star_colour(hoo, finishing.star_mask(hoo)))
         saved = finishing.save_final(hoo, work / "result_final", header)
         out["natural"] = finishing.save_final(img, work / "result_natural", header)["tif"]
-        notes.append("Duo-Band, so the main result is the HOO palette (Hα red, OIII teal); the natural-colour "
-                     "version is saved as result_natural")
+        red = rec.get("red_line", "Hα")
+        pal = (rec.get("nb") or {}).get("palette", "HOO")
+        notes.append(f"{rec.get('filter_label') or 'Duo-Band'}, so the main result is the {pal} palette ({red} red, "
+                     "OIII teal); the natural-colour version is saved as result_natural")
     else:
         saved = finishing.save_final(img, work / "result_final", header)
         if rec["duo"]:
@@ -1410,8 +1426,15 @@ def _target_type(rec: dict) -> str:
     kind = rec.get("kind") or ""
     for t in ("planetary", "emission", "reflection", "galaxy", "cluster"):
         if t in kind:
-            return t + (" (Duo-Band)" if rec.get("duo") else "")
-    return ("nebula" if "nebula" in kind else "other") + (" (Duo-Band)" if rec.get("duo") else "")
+            return t + _filter_tag(rec)
+    return ("nebula" if "nebula" in kind else "other") + _filter_tag(rec)
+
+
+def _filter_tag(rec: dict) -> str:
+    """Runs are compared within one filter: an SII+OIII run against a Duo-Band one would mislead."""
+    if not rec.get("duo"):
+        return ""
+    return f" ({rec.get('filter_label') or 'Duo-Band'})"
 
 
 def _hoo_main(rec: dict) -> bool:

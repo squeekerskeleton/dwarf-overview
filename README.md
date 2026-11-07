@@ -38,6 +38,12 @@ The **History** tab lists every session, so you can see your star sizes, gradien
 
 **Night mode** turns the screen red so it doesn't ruin your night vision in the car.
 
+## Filters in front of the lens, and SHO COMBINE
+
+The DWARF 3 only records its own filter (VIS, Astro or Duo-Band), so a filter held in front of the lens, such as the **SVBONY SV220 (SII + OIII, 7 nm)**, is invisible in the files. In Auto-apply, **Filter in front of the lens** names it for that session (kept per session). Colour calibration then uses SPCC narrowband mode with its passbands (SII 671.6 nm in the red pixels, OIII 500.7 nm in green and blue), the run is finished as two-line narrowband data (main result in the SOO palette, natural colour as `result_natural`), and it's compared only with other runs through the same filter. Select the DWARF's **Astro** filter behind an external filter: the Duo-Band would block its SII line (Auto-apply warns when both were used). To recolour an earlier run, set the filter and run again with **Reuse the last stack**.
+
+**SHO COMBINE** at the top pairs two finished runs of one target, one through the Duo-Band (Hα + OIII) and one through an SII + OIII filter, into the Hubble palette. The SII run is aligned onto the Hα run by its stars, both are cut to the field they share, SII and OIII are scaled against Hα's star-free signal (SII to about 70% of Hα, adjustable), and OIII comes from both runs weighted by their noise. It saves `result_sho` (SII red, Hα green, OIII blue, green toned down), `result_hoo_s` (Hα with SII in the red, OIII teal) and `result_sho_linear.fits` (the aligned lines, linear, for Siril) in a new `SHO_<date>` folder; neither run is changed.
+
 ## MOON STACK (4K)
 
 **MOON STACK** at the top lists every night you shot the Moon, found by itself in the library, on the DWARF over USB-C, or over Wi-Fi: the DWARF's raw Moon sessions (`DWARF_RAW_TELE_Moon_...`) and its Moon videos (`Videos`). Press **Stack this night** and it:

@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update, control, planner, projects, setupcheck, liveview, learn, netcheck, diagnose, autoprocess, hwstats, hwprofile, moonstack
+from . import __version__, assess, config, dwarf, dwarfium_web, history, imaging, lunar, platesolve, scope, tools, update, control, planner, projects, setupcheck, liveview, learn, netcheck, diagnose, autoprocess, hwstats, hwprofile, moonstack, filters, sho
 
 RESTART_EXIT_CODE = 3  # start-windows.bat relaunches the app when it exits with this code
 
@@ -195,6 +195,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(autoprocess.unfinished())
         if url.path == "/api/history":
             return self._json(history.list_recent(100))
+        if url.path == "/api/sho/candidates":
+            return self._json(sho.candidates())
         if url.path.startswith("/api/assessment/"):
             a = history.get_assessment(int(url.path.rsplit("/", 1)[1]))
             return self._json(a or {"error": "not found"}, 200 if a else 404)
@@ -408,7 +410,14 @@ class Handler(BaseHTTPRequestHandler):
                     raise autoprocess.ProcessError("Assess the photo first.")
                 found = autoprocess.find_frames(a["file_path"], bool(body.get("include_failed")))
                 found["sources"] = sorted({f["source"] for f in found.pop("frames")})
+                found["external_filter"] = filters.for_session(found["session"])
+                found["external_choices"] = filters.choices()
                 return self._json(found)
+            if path == "/api/filters/external":
+                return self._json({"filter": filters.set_for_session(str(body["session"]), str(body.get("filter") or ""))})
+            if path == "/api/sho/combine":
+                return self._json(sho.combine(str(body["ha_folder"]), str(body["sii_folder"]),
+                                              sii_boost=float(body.get("sii_boost") or 1.0)))
             if path == "/api/autoprocess/start":
                 return self._json({"job_id": autoprocess.start(int(body["assessment_id"]), bool(body.get("include_failed")),
                                                                full_frame=body.get("full_frame", True) is not False,
