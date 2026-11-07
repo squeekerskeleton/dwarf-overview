@@ -282,18 +282,23 @@ def wait_if_paused() -> None:
         time.sleep(0.5)
 
 
-def stop_jobs() -> int:
-    """Kill every GraXpert/Siril run still going. Returns how many were stopped."""
+def stop_jobs(only: str | None = None) -> int:
+    """Kill every GraXpert/Siril run still going (or just job `only`; the telescope is never touched here).
+    Returns how many were stopped."""
     stopped = 0
-    PAUSED.clear()  # a paused copy loop wakes up and sees the stop
-    for job in list(JOBS.values()):
+    why = "Stopped." if only else "Stopped by Stop all."
+    if not only:
+        PAUSED.clear()  # a paused copy loop wakes up and sees the stop
+    for jid, job in list(JOBS.items()):
+        if only and jid != only:
+            continue
         if job["state"] == "running" and job.get("steps") and not job.get("proc"):
-            job["state"], job["error"] = "stopped", "Stopped by Stop all."  # an Auto-apply run between programs
+            job["state"], job["error"] = "stopped", why  # an Auto-apply run between programs
             stopped += 1
             continue
         proc = job.get("proc")
         if job["state"] == "running" and proc and proc.poll() is None:
-            job["state"], job["error"] = "stopped", "Stopped by Stop all."
+            job["state"], job["error"] = "stopped", why
             for p in _tree(proc.pid)[1:]:
                 try:
                     p.kill()

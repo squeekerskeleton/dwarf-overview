@@ -790,6 +790,9 @@ def _restack(j: _Job, plan: dict, work: Path, proc: Path, tune: list[str], dark:
                          f"{plan['keep_percent']}% of frames that are also among the roundest 90%; middle frame as reference; {'full original frame size' if full else 'cropped to the area all frames share'}; "
                          f"{'Generalized ESD rejection (catches satellite trails)' if found_n >= 50 and 'sigma' not in plan['_from_plan'] else 'Winsorized rejection ' + str(plan['sigma_low']) + '/' + str(plan['sigma_high'])}"
                          f"{', frames weighted by their sharpness' if v14 else ''}.")
+    if found_n < 2:
+        raise ProcessError(f"Only {found_n} frame is left to stack, so there's nothing to register. If the DWARF "
+                           "rejected most of this session, tick Consider frames the DWARF rejected and run it again.")
     for use_dark in ([True, False] if dark else [False]):
         if proc.exists():
             shutil.rmtree(proc, ignore_errors=True)
@@ -1102,6 +1105,12 @@ def _denoise(j: _Job, exe: str | None, current: Path, work: Path, tune: list[str
         if ok:
             out, note = work / "result_dn.fits", f"Siril's denoise (NL-Bayes), modulation {mod:.2f}"
     src = out or current
+    if rec.get("mosaic") and not rec["duo"]:
+        # Broadband mosaics: the colour-noise blur cost the Veil 1,100 faint stars and gained nothing (the layered
+        # finish smooths the sky's colour itself).
+        j.outputs["denoised"] = str(src)
+        j.step(6, "done", (note or "No denoise ran") + ".")
+        return src
     sigma = 2.5 if rec["duo"] else 1.5
     final = work / "result_dnc.fits"
     finishing.chroma_denoise(src, final, sigma)

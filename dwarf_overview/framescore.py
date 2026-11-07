@@ -85,14 +85,25 @@ def screen_failed(passed: list[Path], failed: list[Path], progress=None, sample:
         if progress:
             progress(done / total)
     good = [scores[f] for f in pool if f in scores]
-    if len(good) < 5:
-        return [], f"Left out all {len(failed)} frames the DWARF rejected (too few passed frames to compare them with)."
-    most = max(s["stars"] for s in scores.values()) or 1
-    w = lambda s: s["fwhm"] * most / max(1, s["stars"])
 
     def median(v):
         v = sorted(v)
         return v[len(v) // 2]
+    if len(good) < 5 or len(failed) > 2 * len(passed):
+        # The DWARF rejected most of the session (M 31 on 2026-10-27: 72 of 75, all with round stars and the galaxy
+        # in them; a brighter sky had cut their star count). Its verdict says little then: judge the rejected frames
+        # against each other and keep all but the clear outliers. Siril's sharpness cut still applies afterwards.
+        own = [scores[f] for f in failed if f in scores]
+        if not own:
+            return [], f"Left out all {len(failed)} frames the DWARF rejected (none could be measured)."
+        ms, mf, mr = median([s["stars"] for s in own]), median([s["fwhm"] for s in own]), median([s["round"] for s in own])
+        ok = [f for f in failed if f in scores and scores[f]["stars"] >= 0.5 * ms and scores[f]["fwhm"] <= 1.5 * mf
+              and scores[f]["round"] >= 0.85 * mr]
+        return ok, (f"The DWARF rejected {len(failed)} of {len(failed) + len(passed)} frames, too many to trust its "
+                    f"verdict, so they were judged against each other: {len(ok)} let back in (at least half the median "
+                    f"star count, FWHM within 1.5x and roundness within 15% of the median).")
+    most = max(s["stars"] for s in scores.values()) or 1
+    w = lambda s: s["fwhm"] * most / max(1, s["stars"])
     bar = {"wfwhm": median([w(s) for s in good]), "stars": median([s["stars"] for s in good]),
            "round": max(0.8, 0.97 * median([s["round"] for s in good]))}  # as round as a typical passed frame
     ok = [f for f in failed if f in scores and w(scores[f]) < bar["wfwhm"] and scores[f]["stars"] >= bar["stars"]

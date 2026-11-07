@@ -374,6 +374,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(tools.pause_all())
             if path == "/api/resume":
                 return self._json(tools.resume_all())
+            if path.startswith("/api/job/") and path.endswith("/stop"):  # one job only, never the telescope
+                return self._json({"jobs_stopped": tools.stop_jobs(path.split("/")[3])})
             if path == "/api/scope/stop":
                 out = {"jobs_stopped": tools.stop_jobs()}
                 cfg = config.load()
