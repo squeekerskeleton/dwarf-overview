@@ -1,6 +1,6 @@
 {
-  "version": "0.18.1",
-  "notes": "Mosaics: frames the DWARF rejected now go in too (Siril decides) and denoise stays at 0.6 or more. Every run: the darks the DWARF shot that night are used before its stored master darks (cleaner, same temperature).",
-  "sha256": "946f1474031a71a26796ad2c17f9b90b828f981867cd88a825d623f0325cb299",
-  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.18.1.zip"
+  "version": "0.18.2",
+  "notes": "Mosaics: tuned on the Eastern Veil (filament contrast 54.7 vs 48.3 for the earlier best): every registered frame kept, outlier rejection on big panels, sharpening sized for the real stars, stronger noise reduction. The night's own darks are stacked by Siril. Sessions where the DWARF rejected most frames now keep the good ones. A run can be stopped on its own without touching the telescope.",
+  "sha256": "6739e2126d456562977780ede563f4407c18123ce838c573c2d6095399e6a0e2",
+  "zip_url": "https://raw.githubusercontent.com/squeekerskeleton/dwarf-overview/main/releases/DWARF-Overview-0.18.2.zip"
 }
