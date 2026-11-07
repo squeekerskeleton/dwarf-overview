@@ -584,8 +584,9 @@ def _recommend(plan: dict, a: dict, found: dict, shot: dict) -> dict:
         r["denoise"] = max(r["denoise"] - 0.05, min(1.0, float(gx["denoise_strength"])))
     if panels > 1:
         # Mosaic panels are separate, shallower stacks: 0.55 (a plan's lower value) left the Veil's sky 10% grainier
-        # than the hand-tuned 0.6.
-        r["denoise"] = max(0.6, r["denoise"])
+        # than the hand-tuned 0.6, and 0.75 beat both (mosaic.py).
+        from . import mosaic
+        r["denoise"] = max(mosaic.DENOISE, r["denoise"])
     if "cluster" in kind:
         r["stars"] = 0.0  # the stars are the subject
     elif "galaxy" in kind:
@@ -1048,6 +1049,9 @@ def _deconvolve(j: _Job, exe: str | None, current: Path, work: Path, tune: list[
         except Exception:  # measuring is a nicety; GraXpert still runs with a typical DWARF value
             pass
         psf = round(min(8.0, max(1.5, fwhm or 3.6)), 2)
+        if rec.get("mosaic"):
+            from . import mosaic
+            psf = round(min(8.0, max(mosaic.DECONV_PSF, psf)), 2)
         models = (["deconv-stellar", "deconv-obj"] if "cluster" in rec["kind"] else ["deconv-obj", "deconv-stellar"])
         done, src = [], current
         for i, model in enumerate(models):
@@ -1062,8 +1066,10 @@ def _deconvolve(j: _Job, exe: str | None, current: Path, work: Path, tune: list[
                             f" at {strength:.2f}")
         if done:
             j.outputs["deconvolved"] = str(src)
-            j.step(5, "done", f"GraXpert AI deconvolution: {' then '.join(done)}, for stars measured at {psf} px "
-                              f"FWHM{'' if fwhm else ' (typical DWARF value; measuring failed)'}.")
+            size = (f"sized for {psf} px stars (measured {fwhm:.2f} px; joined mosaic panels read small)"
+                    if rec.get("mosaic") and fwhm and psf > fwhm + 0.01 else
+                    f"for stars measured at {psf} px FWHM{'' if fwhm else ' (typical DWARF value; measuring failed)'}")
+            j.step(5, "done", f"GraXpert AI deconvolution: {' then '.join(done)}, {size}.")
             return src
     j.step(5, "skipped", "Skipped: this GraXpert's command line has no deconvolution (GraXpert 4.0 dropped it; 3.1 "
                          "has it), and other deconvolution does more harm than good on the DWARF's data.")

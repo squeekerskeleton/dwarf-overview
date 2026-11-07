@@ -32,6 +32,12 @@ BGE_SMOOTHING = 0.8
 # Layered finish for a wide broadband field: the stars as they are (no extra gamma or scaling) and a little less
 # coloured; the C 33 values dimmed the Veil's dense Cygnus star field too much.
 LAYERED = dict(star_gamma=1.0, star_floor=0.015, star_sat=0.7, star_scale=1.0)
+# GraXpert on the Veil mosaic (2026-11-07 sweep, filament contrast against the hand-tuned 48.3 sigma): the measured
+# 3.19 px star size gave 45.7, -psfsize 4.75 48.1, 5.5 48.4, 6.0 about the same; denoise 0.65 added 1-2 and 0.75
+# brought it to 52.5 with a smoother sky, 8,000 more faint stars and the fine strands kept at 100%. The resampled,
+# joined panels read smaller than their real PSF, so the measured size is scaled up to at least this.
+DECONV_PSF = 5.5
+DENOISE = 0.75
 
 
 def _np():
