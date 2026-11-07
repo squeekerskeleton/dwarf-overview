@@ -584,7 +584,7 @@ def _recommend(plan: dict, a: dict, found: dict, shot: dict) -> dict:
         r["denoise"] = max(r["denoise"] - 0.05, min(1.0, float(gx["denoise_strength"])))
     if panels > 1:
         # Mosaic panels are separate, shallower stacks: 0.55 (a plan's lower value) left the Veil's sky 10% grainier
-        # than the hand-tuned 0.6, and 0.75 beat both (mosaic.py).
+        # than the hand-tuned 0.6, and 0.80 beat both (mosaic.py).
         from . import mosaic
         r["denoise"] = max(mosaic.DENOISE, r["denoise"])
     if "cluster" in kind:
