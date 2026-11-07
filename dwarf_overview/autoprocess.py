@@ -852,8 +852,9 @@ def _mosaic_stack(j: _Job, found: dict, shot: dict, work: Path, tune: list[str],
         else:
             mark.unlink(missing_ok=True)
             j.step(1, "running", f"Mosaic panel {i + 1} of {len(mos)} ({n} frames): "
-                                 f"{'dark with a pedestal, ' if dark else ''}CFA equalised, the sharpest "
-                                 f"{mosaic.PANEL_KEEP}% of frames, the whole dithered field kept, 32-bit.")
+                                 f"{'dark with a pedestal, ' if dark else ''}CFA equalised, "
+                                 + (f"the sharpest {mosaic.PANEL_KEEP}% of frames" if mosaic.PANEL_KEEP < 100 else "every frame that registers")
+                                 + ", the whole dithered field kept, 32-bit.")
             for use_dark in ([True, False] if dark else [False]):
                 shutil.rmtree(pw / "process", ignore_errors=True)
                 lines, phases = mosaic.panel_script(tune, n, use_dark)

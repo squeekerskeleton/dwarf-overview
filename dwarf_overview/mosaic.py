@@ -4,7 +4,8 @@ Worked out on Kip's 2-panel Veil (2026-11-04, 2x130 x 60 s): stacking every fram
 frame holds only about 50 stars and the panels barely overlap. What worked, and beat the DWARF's own mosaic
 (filaments 48 sigma against 7.6, sky noise 5x lower, about 7x the stars, no seam):
 
-1. each panel stacked on its own (32-bit, a pedestal dark, CFA equalised, the whole dithered field kept);
+1. each panel stacked on its own (32-bit, a pedestal dark, CFA equalised, the whole dithered field kept,
+   the DWARF's rejected frames included);
 2. each panel's background taken out by GraXpert (smoothing 0.8: 0.4 left a dark moat round the nebula), with
    the empty border filled for GraXpert, which turns zeros into NaN, and set back to 0 (no data) afterwards;
 3. the panels plate solved and joined by Siril (overlap normalisation, 200 px feather);
@@ -22,10 +23,11 @@ from pathlib import Path
 # The DWARF 3's telephoto as measured by plate solving (the nominal 150 mm is 1% long).
 FOCAL_MM = 148.46
 PIXEL_UM = 2.0
-# Panel stacks: the whole dithered field (framing=max), the sharpest 95% of frames, faint stars found too
-# (sigma 0.4), and 8 star pairs enough to register: the stricter defaults dropped most 60 s frames. A stricter
-# 75% cut on the Veil's upper panel made it 5% noisier with no sharper stars.
-PANEL_KEEP = 95
+# Panel stacks: the whole dithered field (framing=max), every frame that registers (frames weighted by sharpness),
+# faint stars found too (sigma 0.4), and 8 star pairs enough to register: the stricter defaults dropped most 60 s
+# frames. On the Veil keeping them all beat the sharpest 95% by 0.5 sigma, and a 75% cut made the upper panel 5%
+# noisier with no sharper stars.
+PANEL_KEEP = 100
 # Disk per raw frame while one panel stacks: 32-bit converted, calibrated (RGB) and registered (on a larger canvas).
 SPACE_FACTOR = 15.0
 BGE_SMOOTHING = 0.8
@@ -116,9 +118,12 @@ def panel_script(tune: list[str], n: int, dark: bool) -> tuple[list[str], list[s
              f"setref {seq} {max(1, (n + 1) // 2)}",
              "setfindstar -sigma=0.4",
              f"register {seq} -2pass -minpairs=8",
-             f"seqapplyreg {seq} -framing=max -interp=lanczos4 -filter-wfwhm={PANEL_KEEP}%",
-             # Winsorized 3/3 as in the Veil test; -maximize keeps every pixel any frame covered.
-             f"stack r_{seq} rej w 3 3 -norm=addscale -weight=wfwhm -maximize -32b -out=../stack", ""]
+             f"seqapplyreg {seq} -framing=max -interp=lanczos4"
+             + (f" -filter-wfwhm={PANEL_KEEP}%" if PANEL_KEEP < 100 else ""),
+             # Generalized ESD past 50 frames (beat Winsorized 3/3 by 0.6 sigma on the Veil's ~120-frame panels);
+             # -maximize keeps every pixel any frame covered.
+             f"stack r_{seq} {'rej g 0.3 0.05' if n >= 50 else 'rej w 3 3'} -norm=addscale -weight=wfwhm -maximize "
+             "-32b -out=../stack", ""]
     phases = ["convert", "calibrate", "register", "seqapplyreg", "stack"] if dark else \
         ["convert", "register", "seqapplyreg", "stack"]
     return lines, phases
