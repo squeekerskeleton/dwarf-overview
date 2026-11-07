@@ -73,6 +73,87 @@ def pick(session: str, shot_temp: float | None, binning: int = 1) -> dict | None
     return min(match, key=lambda c: (abs(c["temp"] - t), -c["stack"]))
 
 
+SESSION_TIME = re.compile(r"(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})")
+DARK_SESSION = re.compile(r"tele.*?exp_([\d.]+)_gain_(\d+)", re.I)
+RAW_DARK = re.compile(r"\.(fits?|fts)$", re.I)
+
+
+def _when(name: str):
+    import datetime
+    m = SESSION_TIME.search(name)
+    if not m:
+        return None
+    try:
+        return datetime.datetime(*map(int, m.groups()))
+    except ValueError:
+        return None
+
+
+def pick_session_darks(session: str) -> dict | None:
+    """Darks the DWARF shot that night (Astronomy/DWARF_DARK/tele_exp_<s>_gain_<g>_..._<date>): raw frames of
+    the same exposure and gain taken just before the lights, at the same temperature. On the 2026-11-04 Veil
+    their master was cleaner than CALI_FRAME's (one more frame registered per panel, 3% less noise).
+    Returns {name, frames: [{name, where, source}], hours} for the set closest in time (within 24 h), or None."""
+    m, t0 = SESSION.search(session), _when(session)
+    if not m or not t0:
+        return None
+    exp, gain = float(m.group(1)), int(m.group(2))
+    sets = []
+
+    def consider(name, files):
+        dm, t = DARK_SESSION.search(name), _when(name)
+        if not dm or not t or abs(float(dm.group(1)) - exp) > 0.01 or int(dm.group(2)) != gain or "bin_2" in name.lower():
+            return
+        hours = abs((t0 - t).total_seconds()) / 3600
+        frames = [f for f in files if RAW_DARK.search(f["name"]) and not f["name"].lower().startswith(("stacked", "failed"))]
+        if hours <= 24 and len(frames) >= 3:
+            sets.append({"name": name, "frames": frames, "hours": hours})
+
+    roots = [Path(u) / "DWARF_DARK" for u in scope.usb_folders()] + [dwarf.library_dir() / "DWARF_DARK"]
+    for root in roots:
+        if root.is_dir():
+            for d in root.iterdir():
+                if d.is_dir():
+                    consider(d.name, [{"name": f.name, "where": str(f), "source": "USB-C"} for f in d.iterdir() if f.is_file()])
+    if not sets:
+        for root in dwarf.ROOTS.values():
+            try:
+                for e in dwarf._listing(f"{root}DWARF_DARK/"):
+                    if e["dir"] and DARK_SESSION.search(e["name"]) and _when(e["name"]):
+                        path = f"{root}DWARF_DARK/{e['name']}/"
+                        consider(e["name"], [{"name": x["name"], "where": path + x["name"], "source": "Wi-Fi"}
+                                             for x in dwarf._listing(path) if not x["dir"]])
+            except (dwarf.DwarfError, OSError):
+                continue
+            if sets:
+                break
+    return min(sets, key=lambda s: s["hours"]) if sets else None
+
+
+def build_session_master(c: dict, cache: Path) -> Path:
+    """Average the night's raw darks with 3-sigma clipping (Siril's rej 3 3, no normalisation) into one FITS."""
+    import numpy as np
+    from astropy.io import fits
+    out = cache / f"{c['name']}_master.fits"
+    if out.exists():
+        return out
+    folder = cache / c["name"]
+    stack = []
+    for f in c["frames"]:
+        local = fetch(f, folder)
+        stack.append(np.asarray(fits.getdata(local), dtype="float32"))
+    if len({a.shape for a in stack}) != 1:
+        raise ValueError("the night's darks aren't all the same size")
+    cube = np.stack(stack)
+    med = np.median(cube, axis=0)
+    sig = 1.4826 * np.median(np.abs(cube - med), axis=0)
+    keep = np.abs(cube - med) <= 3 * np.maximum(sig, 1.0)
+    master = (cube * keep).sum(axis=0) / np.maximum(keep.sum(axis=0), 1)
+    cache.mkdir(parents=True, exist_ok=True)
+    fits.PrimaryHDU(master.astype("float32")).writeto(out, overwrite=True)
+    return out
+
+
 def fetch(c: dict, cache: Path) -> Path:
     cache.mkdir(parents=True, exist_ok=True)
     target = cache / c["name"]

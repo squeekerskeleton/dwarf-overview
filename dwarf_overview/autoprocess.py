@@ -176,7 +176,9 @@ def find_frames(preview_path: str, include_failed: bool = False) -> dict:
     frames: dict[tuple, dict] = {}
 
     def add(tag, fname, source, where, size):
-        if _is_frame(fname, include_failed) and (tag, fname) not in frames:
+        # A mosaic takes the DWARF's rejected frames too: its live stacker rejects many usable 60 s frames on a dark
+        # sky (4 of panel 1's 33 on the Veil passed Siril's registration and sharpness cut), and Siril decides.
+        if _is_frame(fname, include_failed or bool(panels)) and (tag, fname) not in frames:
             frames[(tag, fname)] = {"name": fname, "source": source, "where": where, "size": size, "panel": tag}
 
     for tag, sub, pw in groups:
@@ -580,6 +582,10 @@ def _recommend(plan: dict, a: dict, found: dict, shot: dict) -> dict:
     if gx.get("run_denoise") and gx.get("denoise_strength") is not None:
         # A plan may ask for more, never much less: plans asked for 0.30, which measurably did nothing on C 33.
         r["denoise"] = max(r["denoise"] - 0.05, min(1.0, float(gx["denoise_strength"])))
+    if panels > 1:
+        # Mosaic panels are separate, shallower stacks: 0.55 (a plan's lower value) left the Veil's sky 10% grainier
+        # than the hand-tuned 0.6.
+        r["denoise"] = max(0.6, r["denoise"])
     if "cluster" in kind:
         r["stars"] = 0.0  # the stars are the subject
     elif "galaxy" in kind:
@@ -650,7 +656,16 @@ def _pipeline(j: _Job, a: dict, found: dict, resume: dict | None = None) -> dict
     else:
         copied = _copy_frames(j, found, lights)
         folders = [work / p["tag"] / "lights" for p in mos] or [lights]
-        failed_note = " ".join(n for n in (_screen_failed(j, d.parent, d, j.meta.get("include_failed")) for d in folders) if n)
+        if mos:  # every frame goes to Siril (frames held back by an earlier run come back too)
+            for d in folders:
+                for f in list((d.parent / FAILED_DIR).glob("*")) if (d.parent / FAILED_DIR).is_dir() else []:
+                    if f.is_file() and FRAME.search(f.name):
+                        f.replace(d / f.name)
+            n_failed = sum(1 for d in folders for f in d.glob("failed*") if FRAME.search(f.name))
+            failed_note = (f"The {n_failed} frames the DWARF rejected are in too; Siril's registration and sharpness "
+                           "cut decide which ones are used." if n_failed else "")
+        else:
+            failed_note = _screen_failed(j, work, lights, j.meta.get("include_failed"))
         dark_note = _master_dark(j, found, shot, work, folders[0])
         counts = [sum(1 for f in d.iterdir() if f.is_file() and FRAME.search(f.name)) if d.is_dir() else 0 for d in folders]
         where = (f"{' + '.join(map(str, counts))} frames ({len(mos)} panels) ready to stack in {work}" if mos else
@@ -735,6 +750,19 @@ def _master_dark(j: _Job, found: dict, shot: dict, work: Path, lights: Path) -> 
     sample = next((f for f in sorted(lights.iterdir()) if FRAME.search(f.name)), None) if lights.is_dir() else None
     if not sample:
         return ""
+    try:  # the darks the DWARF shot that night come first: same temperature, and a cleaner master
+        n = darks.pick_session_darks(found["session"])
+    except Exception:
+        n = None
+    if n:
+        try:
+            f = darks.build_session_master(n, work_root() / "_darks")
+            why = darks.prepare(f, sample, target)
+            return (f"Using the {len(n['frames'])} darks the DWARF shot that night ({n['name']}, "
+                    f"{n['hours']:.1f} h from the lights; {why}).")
+        except Exception as e:
+            target.unlink(missing_ok=True)
+            j.log(f"The night's own darks ({n['name']}) didn't fit ({e}); trying the DWARF's stored master darks.")
     try:
         c = darks.pick(found["session"], _shot_temp(shot, found))
     except Exception as e:  # never stop the run over the dark
