@@ -138,6 +138,7 @@
   <button id="settingsBtn">Settings</button>
   <button id="scanConnBtn" class="primary" title="Search for the DWARF until it's found (up to 30 seconds), then connect">SCAN &amp; CONNECT</button>
   <button id="moonBtn" title="Stack every Moon shot from one night into a sharp 4K Moon">MOON STACK</button>
+  <button id="shoBtn" title="Combine an Hα+OIII run (Duo-Band) with an SII+OIII run (e.g. SVBONY SV220) of the same target into the Hubble palette">SHO COMBINE</button>
   <button id="lastBtn" title="Pick up an Auto-apply run that didn't finish, at the step where it stopped">LAST SESSION</button>
   <button id="pauseAll" class="stopall" style="background:#8a6d1a" title="Pause the programs the app is running (Siril, GraXpert) and frame copying; press again to resume">PAUSE ALL</button>
   <button id="stopAll" class="stopall" title="Stop the telescope moving, tracking, capturing and focusing, and stop any GraXpert or Siril run">Stop all</button>
@@ -152,6 +153,14 @@
   <div id="moonSteps" style="margin-top:6px"></div>
   <pre id="moonLog" class="hidden" style="max-height:160px;overflow:auto"></pre>
   <div class="row" style="justify-content:flex-end;margin-top:12px"><button id="moonClose">Close (the stack keeps going)</button></div></dialog>
+<dialog id="shoDlg" style="width:min(820px,95vw)"><h2 style="margin-top:0">SHO combine (Hubble palette)</h2>
+  <p class="caption">Two finished Auto-apply runs of the same target: one through the DWARF's Duo-Band (Hα + OIII) and one through an SII + OIII filter in front of the lens (Astro filter selected). The SII run is aligned onto the Hα run by its stars, both are cut to the field they share, SII and OIII are balanced against Hα, and OIII comes from both runs. Saves the SHO (SII red, Hα green, OIII blue), an HOO version with SII in the red, and the linear lines as FITS, in a new SHO folder. Neither run is changed.</p>
+  <label for="shoHa">Hα + OIII run (Duo-Band)</label><select id="shoHa"></select>
+  <label for="shoS">SII + OIII run</label><select id="shoS"></select>
+  <div class="row" style="margin-top:8px"><label for="shoBoost" style="margin:0">SII strength</label><select id="shoBoost" style="width:auto"><option value="0.7">lower</option><option value="1" selected>balanced</option><option value="1.4">stronger</option></select>
+    <button class="primary" id="shoRun" style="margin-left:auto">Combine</button></div>
+  <div id="shoOut" class="caption" style="margin-top:8px"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:12px"><button id="shoClose">Close</button></div></dialog>
 <dialog id="lastDlg" style="width:min(820px,95vw)"><h2 style="margin-top:0">Last session</h2>
   <p class="caption">Auto-apply runs that didn't finish. Resume carries on from the step where each one stopped; finished steps whose files are still there aren't redone, and frames already copied aren't copied again.</p>
   <div id="lastList"></div>
@@ -219,6 +228,8 @@
             <label style="display:inline-flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="autoFailed" autocomplete="off" style="width:auto" title="Rejected frames rank far below the passed ones: only the few sharper, rounder and with more stars than a typical passed frame get in, at most a tenth of the stack."> Consider frames the DWARF rejected (only the best few get in)</label>
             <label style="display:inline-flex;gap:6px;align-items:center;margin:0" title="On: the result is the same size as the DWARF's frames. Off: cropped to the area every frame shares, which can be much smaller after hours of sky rotation."><input type="checkbox" id="autoFull" checked style="width:auto"> Keep the original frame size</label>
             <label id="autoReuseL" class="hidden" style="display:inline-flex;gap:6px;align-items:center;margin:0" title="Skips copying and stacking and redoes everything after it, in a few minutes."><input type="checkbox" id="autoReuse" style="width:auto"> Reuse the last stack (redo only the finishing)</label></div>
+          <div class="row hidden" id="autoExtRow" style="margin-top:6px"><label for="autoExt" style="margin:0" title="The DWARF only records its own filter, so a filter held in front of the lens must be named here. Colour calibration then uses its passbands. Select the DWARF's Astro filter behind it.">Filter in front of the lens</label>
+            <select id="autoExt" style="width:auto"></select><span id="autoExtNote" class="caption"></span></div>
           <div id="autoFrames" class="caption">Runs the whole pipeline on every raw frame of this session: the DWARF's dark, stack, crop, background extraction, plate solve and colour calibration, deconvolution, noise reduction, stretch and star reduction, with settings chosen from your data. Your originals are never changed.</div>
           <div id="autoProg" class="hidden" style="margin-top:8px"><div class="row" style="justify-content:space-between"><b id="autoPct">0%</b><span class="caption" id="autoEta"></span></div>
             <div class="hwbar" style="height:12px"><span id="autoBar" style="width:0%"></span></div></div>
@@ -788,9 +799,19 @@ async function autoFrames() {
       (f.fits ? "" : ` <span class="error">Not enough room: choose a bigger drive for the processing folder in Settings.</span>`) +
       (!f.dwarf_reached && f.count < 3 ? ` <span class="warn">The DWARF isn't reachable, so its frames can't be listed. Switch it on (or plug in USB-C).</span>` : "");
     $("autoReuseL").classList.toggle("hidden", !f.has_stack); $("autoReuse").checked = !!f.has_stack;
+    autoSession = f.session;
+    $("autoExt").innerHTML = (f.external_choices || []).map((c) => `<option value="${esc(c.key)}">${esc(c.name)}</option>`).join("");
+    $("autoExt").value = f.external_filter || ""; $("autoExtNote").textContent = "";
+    $("autoExtRow").classList.toggle("hidden", !(f.external_choices || []).length);
     $("autoRun").disabled = !(f.fits || f.has_stack) || f.count < 3;
   } catch (e) { $("autoFrames").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
 }
+let autoSession = "";
+$("autoExt").onchange = async () => {
+  try { await api("/api/filters/external", { session: autoSession, filter: $("autoExt").value });
+    $("autoExtNote").innerHTML = '<span class="ok">Saved for this session.</span>' + ($("autoExt").value ? " Colour will use its passbands; redo the finishing with “Reuse the last stack” to recolour an earlier run." : ""); }
+  catch (e) { $("autoExtNote").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+};
 $("autoFailed").checked = false;  // browsers restore a ticked box after a reload; rejected frames stay opt-in each time
 $("autoFailed").onchange = autoFrames;
 function fmtDur(s) { s = Math.round(s); return s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.round(s % 3600 / 60)} min` : s >= 60 ? `${Math.round(s / 60)} min` : `${s} s`; }
@@ -922,6 +943,36 @@ $("mautoRun").onclick = async () => {
   $("mautoRun").disabled = false;
 };
 $("moonClose").onclick = () => $("moonDlg").close();
+// ---------------- SHO COMBINE: an Hα+OIII run and an SII+OIII run into the Hubble palette
+const FILTER_NAMES = { duo: "Duo-Band", sv220: "SV220 SII+OIII", astro: "Astro" };
+async function openSho() {
+  $("shoOut").innerHTML = '<span class="spinner"></span> Looking for finished runs&hellip;';
+  $("shoDlg").showModal();
+  let runs;
+  try { runs = await api("/api/sho/candidates"); } catch (e) { $("shoOut").innerHTML = `<span class="error">${esc(e.message)}</span>`; return; }
+  if (runs.length < 2) { $("shoOut").innerHTML = '<span class="warn">Needs two finished Auto-apply runs: one Duo-Band and one SII + OIII.</span>'; $("shoRun").disabled = true; return; }
+  const opt = (r) => `<option value="${esc(r.folder)}">${esc(r.name)}${r.filter ? ` · ${esc(FILTER_NAMES[r.filter] || r.filter)}` : ""} · ${new Date(r.modified * 1000).toLocaleDateString()}</option>`;
+  $("shoHa").innerHTML = runs.map(opt).join(""); $("shoS").innerHTML = runs.map(opt).join("");
+  const ha = runs.find((r) => r.filter === "duo"), sv = runs.find((r) => r.filter === "sv220");
+  if (ha) $("shoHa").value = ha.folder;
+  $("shoS").value = sv ? sv.folder : (runs.find((r) => r.folder !== $("shoHa").value) || runs[0]).folder;
+  $("shoRun").disabled = false; $("shoOut").textContent = "";
+}
+$("shoBtn").onclick = openSho;
+$("shoClose").onclick = () => $("shoDlg").close();
+$("shoRun").onclick = async () => {
+  if ($("shoHa").value === $("shoS").value) { $("shoOut").innerHTML = '<span class="warn">Pick two different runs.</span>'; return; }
+  $("shoRun").disabled = true; $("shoOut").innerHTML = '<span class="spinner"></span> Aligning and combining (a minute or two for a big mosaic)&hellip;';
+  try {
+    const r = await api("/api/sho/combine", { ha_folder: $("shoHa").value, sii_folder: $("shoS").value, sii_boost: +$("shoBoost").value });
+    latestOutput = r.final;
+    $("shoOut").innerHTML = `<span class="ok">Done.</span> ${esc(r.note)}<br>SHO: ${esc(r.final)} (also PNG, JPG, FITS)<br>HOO with SII: ${esc(r.hoo_s)}<br>Linear lines for Siril: ${esc(r.linear)} `;
+    const m = document.createElement("button"); m.textContent = "Measure the result";
+    m.onclick = () => { $("shoDlg").close(); document.querySelector('.tab[data-tab="work"]').click(); analyze(r.final, "deepsky"); };
+    $("shoOut").appendChild(m);
+  } catch (e) { $("shoOut").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+  $("shoRun").disabled = false;
+};
 $("lastClose").onclick = () => $("lastDlg").close();
 
 $("gxRun").onclick = async () => {
